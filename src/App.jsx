@@ -107,70 +107,70 @@ function AppShell({ data, saveData, storageError, clearStorageError, authUser, o
     if (success) setNotice({ type: 'success', text: 'Expense deleted. Your monthly totals are up to date.' })
   }
 
+  const exportCsv = () => {
+    const rows = [
+      ['Type', 'Date', 'Description', 'Category', 'Amount (INR)', 'Group'],
+      ...data.expenses.map((expense) => ['Expense', expense.date, expense.note || expense.category, expense.category, expense.amount, 'Personal']),
+      ...data.income.map((item) => ['Income', item.date, item.source || 'Income', '', item.amount, 'Personal']),
+      ...data.groups.flatMap((group) => group.expenses.map((expense) => [
+        'Group expense',
+        expense.date,
+        expense.title || expense.note || expense.category || 'Shared expense',
+        expense.category || '',
+        expense.amount,
+        group.name,
+      ])),
+    ]
+    const csv = rows.map((row) => row.map((value) => `"${String(value ?? '').replaceAll('"', '""')}"`).join(',')).join('\r\n')
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `spendly-transactions-${todayISO()}.csv`
+    document.body.append(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
+  const exportPdf = () => {
+    const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[character])
+    const rows = [
+      ...data.expenses.map((expense) => ({ date: expense.date, label: expense.note || expense.category, category: expense.category, amount: expense.amount, group: 'Personal', type: 'Expense' })),
+      ...data.income.map((item) => ({ date: item.date, label: item.source || 'Income', category: 'Income', amount: item.amount, group: 'Personal', type: 'Income' })),
+      ...data.groups.flatMap((group) => group.expenses.map((expense) => ({
+        date: expense.date,
+        label: expense.title || expense.note || expense.category || 'Shared expense',
+        category: expense.category || 'Shared',
+        amount: expense.amount,
+        group: group.name,
+        type: 'Group expense',
+      }))),
+    ].sort((a, b) => b.date.localeCompare(a.date))
+    const tableRows = rows.map((row) => `<tr><td>${escapeHtml(formatDate(row.date, { short: true }))}</td><td>${escapeHtml(row.label)}</td><td>${escapeHtml(row.category)}</td><td>${escapeHtml(row.group)}</td><td>${escapeHtml(row.type)}</td><td class="amount">${escapeHtml(formatMoney(row.amount, { decimals: true }))}</td></tr>`).join('')
+    const reportWindow = window.open('', '_blank')
+    if (!reportWindow) {
+      setNotice({ type: 'error', text: 'Allow pop-ups to print or save your report as a PDF.' })
+      return
+    }
+    reportWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Spendly transaction report</title><style>
+      body{font:14px Arial,sans-serif;color:#342f32;margin:36px}h1{font-size:24px;margin:0 0 6px}.meta{color:#756c70;margin:0 0 22px}
+      table{width:100%;border-collapse:collapse;font-size:11px}th,td{padding:9px 7px;border-bottom:1px solid #eadfe1;text-align:left}th{background:#fff3f1;color:#5c4347}
+      .amount{text-align:right;white-space:nowrap}@media print{body{margin:15mm}}
+      </style></head><body><h1>Spendly transaction report</h1><p class="meta">Generated ${escapeHtml(formatDate(todayISO(), { short: true }))} · ${rows.length} records · Stored on this device</p>
+      <table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Account</th><th>Type</th><th class="amount">Amount</th></tr></thead><tbody>${tableRows || '<tr><td colspan="6">No transactions to report.</td></tr>'}</tbody></table>
+      <script>window.addEventListener('load',()=>window.print())</script></body></html>`)
+    reportWindow.document.close()
+    reportWindow.addEventListener('afterprint', () => reportWindow.close(), { once: true })
+  }
+
   const exportBackup = () => {
     try {
       const backup = {
         ...data,
         exportedAt: new Date().toISOString(),
-      }
-
-      const exportCsv = () => {
-        const rows = [
-          ['Type', 'Date', 'Description', 'Category', 'Amount (INR)', 'Group'],
-          ...data.expenses.map((expense) => ['Expense', expense.date, expense.note || expense.category, expense.category, expense.amount, 'Personal']),
-          ...data.income.map((item) => ['Income', item.date, item.source || 'Income', '', item.amount, 'Personal']),
-          ...data.groups.flatMap((group) => group.expenses.map((expense) => [
-            'Group expense',
-            expense.date,
-            expense.title || expense.note || expense.category || 'Shared expense',
-            expense.category || '',
-            expense.amount,
-            group.name,
-          ])),
-        ]
-        const csv = rows.map((row) => row.map((value) => `"${String(value ?? '').replaceAll('"', '""')}"`).join(',')).join('\r\n')
-        const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' })
-        const url = URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        link.href = url
-        link.download = `spendly-transactions-${todayISO()}.csv`
-        document.body.append(link)
-        link.click()
-        link.remove()
-        window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-      }
-
-      const exportPdf = () => {
-        const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
-          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-        })[character])
-        const rows = [
-          ...data.expenses.map((expense) => ({ date: expense.date, label: expense.note || expense.category, category: expense.category, amount: expense.amount, group: 'Personal', type: 'Expense' })),
-          ...data.income.map((item) => ({ date: item.date, label: item.source || 'Income', category: 'Income', amount: item.amount, group: 'Personal', type: 'Income' })),
-          ...data.groups.flatMap((group) => group.expenses.map((expense) => ({
-            date: expense.date,
-            label: expense.title || expense.note || expense.category || 'Shared expense',
-            category: expense.category || 'Shared',
-            amount: expense.amount,
-            group: group.name,
-            type: 'Group expense',
-          }))),
-        ].sort((a, b) => b.date.localeCompare(a.date))
-        const tableRows = rows.map((row) => `<tr><td>${escapeHtml(formatDate(row.date, { short: true }))}</td><td>${escapeHtml(row.label)}</td><td>${escapeHtml(row.category)}</td><td>${escapeHtml(row.group)}</td><td>${escapeHtml(row.type)}</td><td class="amount">${escapeHtml(formatMoney(row.amount, { decimals: true }))}</td></tr>`).join('')
-        const reportWindow = window.open('', '_blank')
-        if (!reportWindow) {
-          setNotice({ type: 'error', text: 'Allow pop-ups to print or save your report as a PDF.' })
-          return
-        }
-        reportWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Spendly transaction report</title><style>
-          body{font:14px Arial,sans-serif;color:#342f32;margin:36px}h1{font-size:24px;margin:0 0 6px}.meta{color:#756c70;margin:0 0 22px}
-          table{width:100%;border-collapse:collapse;font-size:11px}th,td{padding:9px 7px;border-bottom:1px solid #eadfe1;text-align:left}th{background:#fff3f1;color:#5c4347}
-          .amount{text-align:right;white-space:nowrap}@media print{body{margin:15mm}}
-          </style></head><body><h1>Spendly transaction report</h1><p class="meta">Generated ${escapeHtml(formatDate(todayISO(), { short: true }))} · ${rows.length} records · Stored on this device</p>
-          <table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Account</th><th>Type</th><th class="amount">Amount</th></tr></thead><tbody>${tableRows || '<tr><td colspan="6">No transactions to report.</td></tr>'}</tbody></table>
-          <script>window.addEventListener('load',()=>window.print())</script></body></html>`)
-        reportWindow.document.close()
-        reportWindow.addEventListener('afterprint', () => reportWindow.close(), { once: true })
       }
       const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
@@ -580,11 +580,11 @@ function ExpenseDialog({ expense, onClose, onSave }) {
         </div>
         <form className="dialog-form" onSubmit={submit}>
           <label className="field amount-field">
-            <span>How much was it?</span>
+            <span>Amount (₹)</span>
             <span className="amount-input-wrap"><span aria-hidden="true">₹</span><input autoFocus type="number" inputMode="decimal" min="0.01" step="0.01" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} required /></span>
           </label>
           <CategorySelect value={category} onChange={setCategory} />
-          <label className="field"><span>When did it happen?</span><input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></label>
+          <label className="field"><span>Date</span><input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></label>
           <label className="field"><span>A little note <span className="optional">(optional)</span></span><input type="text" placeholder="e.g. Coffee with a friend" value={note} onChange={(event) => setNote(event.target.value)} maxLength={120} /></label>
           <div className="field"><span>Receipt photo <span className="optional">(optional)</span></span><ReceiptField receipt={receipt} onChange={setReceipt} onError={setReceiptError} />{receiptError && <p className="field-error" role="alert">{receiptError}</p>}</div>
           {formError && <p className="field-error" role="alert">{formError}</p>}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDownRight,
   ArrowRight,
@@ -29,7 +29,7 @@ import {
   Wallet,
   X,
 } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import {
   CategoryIcon,
   CategorySelect,
@@ -247,14 +247,14 @@ export function HistoryPage({ data, setExpenseDialog, onDeleteExpense }) {
   const [rangeStart, setRangeStart] = useState('')
   const [rangeEnd, setRangeEnd] = useState('')
   const [expenseType, setExpenseType] = useState('all')
-  const groupExpenses = data.groups.flatMap((group) => group.expenses.map((expense) => ({
+  const groupExpenses = useMemo(() => data.groups.flatMap((group) => group.expenses.map((expense) => ({
     ...expense,
     id: `group:${group.id}:${expense.id}`,
     category: expense.category ?? 'other',
     note: expense.title || expense.note || 'Shared expense',
     type: 'group',
     groupName: group.name,
-  })))
+  }))), [data.groups])
   const filteredExpenses = useMemo(() => [...data.expenses]
     .map((expense) => ({ ...expense, type: 'personal' }))
     .concat(groupExpenses)
@@ -263,8 +263,17 @@ export function HistoryPage({ data, setExpenseDialog, onDeleteExpense }) {
     .filter((expense) => category === 'all' || expense.category === category)
     .filter((expense) => !rangeStart || expense.date >= rangeStart)
     .filter((expense) => !rangeEnd || expense.date <= rangeEnd)
-    .filter((expense) => `${expense.note ?? ''} ${expense.category} ${expense.date} ${expense.groupName ?? ''}`.toLowerCase().includes(query.trim().toLowerCase())), [data.expenses, data.groups, groupExpenses, category, expenseType, rangeStart, rangeEnd, query])
+    .filter((expense) => `${expense.note ?? ''} ${expense.category} ${expense.date} ${expense.groupName ?? ''}`.toLowerCase().includes(query.trim().toLowerCase())), [data.expenses, groupExpenses, category, expenseType, rangeStart, rangeEnd, query])
   const total = filteredExpenses.reduce((sum, expense) => sum + expense.amount, 0)
+  const expensesByMonth = useMemo(() => {
+    const months = new Map()
+    filteredExpenses.forEach((expense) => {
+      const month = expense.date.slice(0, 7)
+      if (!months.has(month)) months.set(month, [])
+      months.get(month).push(expense)
+    })
+    return [...months.entries()].map(([month, expenses]) => ({ month, expenses }))
+  }, [filteredExpenses])
   const categoryId = 'history-category'
 
   return (
@@ -302,7 +311,24 @@ export function HistoryPage({ data, setExpenseDialog, onDeleteExpense }) {
           <span>Total <strong>{formatMoney(total)}</strong></span>
         </div>
         {filteredExpenses.length ? (
-          <ExpenseList expenses={filteredExpenses.map((expense) => ({ ...expense, note: expense.type === 'group' ? `${expense.groupName}: ${expense.note}` : expense.note }))} onEdit={setExpenseDialog} onDelete={onDeleteExpense} />
+          <div className="history-month-groups">
+            {expensesByMonth.map(({ month, expenses }) => (
+              <section className="history-month-group" key={month} aria-labelledby={`history-month-${month}`}>
+                <div className="history-month-heading">
+                  <h2 id={`history-month-${month}`}>{formatMonth(month)}</h2>
+                  <span>{expenses.length} {expenses.length === 1 ? 'expense' : 'expenses'} · {formatMoney(expenses.reduce((sum, expense) => sum + expense.amount, 0))}</span>
+                </div>
+                <ExpenseList
+                  expenses={expenses.map((expense) => ({
+                    ...expense,
+                    note: expense.type === 'group' ? `${expense.groupName}: ${expense.note}` : expense.note,
+                  }))}
+                  onEdit={setExpenseDialog}
+                  onDelete={onDeleteExpense}
+                />
+              </section>
+            ))}
+          </div>
         ) : (
           <EmptyState icon={History} title={data.expenses.length || groupExpenses.length ? 'No matching expenses' : 'Nothing to see just yet'}>
             {data.expenses.length || groupExpenses.length ? 'Try a different search, date range, category, or account type.' : 'Once you add a little something, it’ll be right here.'}
@@ -790,6 +816,7 @@ export function SettingsPage({ data, saveData, onExport, onExportCsv, onExportPd
             <input ref={importInputRef} className="visually-hidden" type="file" accept=".json,application/json" onChange={onImport} aria-label="Choose a JSON backup file" />
           </div>
           <p className="backup-count">{totalExpenses} {totalExpenses === 1 ? 'expense' : 'expenses'} · {data.income.length} {data.income.length === 1 ? 'income record' : 'income records'} · {data.recurringExpenses.length} {data.recurringExpenses.length === 1 ? 'recurring rule' : 'recurring rules'} · {data.savingsGoals.length} {data.savingsGoals.length === 1 ? 'savings goal' : 'savings goals'}</p>
+          <DemoBankConnection data={data} saveData={saveData} />
           <StatementImporter data={data} saveData={saveData} />
         </article>
 
@@ -809,6 +836,158 @@ export function SettingsPage({ data, saveData, onExport, onExportCsv, onExportPd
         </article>
       </section>
     </>
+  )
+}
+
+const DEMO_BANK_TRANSACTIONS = [
+  {
+    fingerprint: 'spendly-demo-bank-v1-upi-debit',
+    description: 'UPI debit · Demo Coffee House',
+    amount: 240,
+    type: 'debit',
+    method: 'UPI',
+    category: 'food',
+  },
+  {
+    fingerprint: 'spendly-demo-bank-v1-upi-debit',
+    description: 'Duplicate UPI debit · Demo Coffee House',
+    amount: 240,
+    type: 'debit',
+    method: 'UPI',
+    category: 'food',
+  },
+  {
+    fingerprint: 'spendly-demo-bank-v1-refund',
+    description: 'Refund · Demo Online Store',
+    amount: 520,
+    type: 'refund',
+    method: 'UPI',
+    category: 'shopping',
+  },
+  {
+    fingerprint: 'spendly-demo-bank-v1-credit',
+    description: 'Credit · Demo Salary',
+    amount: 42000,
+    type: 'credit',
+    method: 'NEFT',
+    category: 'other',
+  },
+]
+
+function DemoBankConnection({ data, saveData }) {
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
+  const importedIds = new Set(data.statementImports ?? [])
+  const demoDebitImported = importedIds.has(DEMO_BANK_TRANSACTIONS[0].fingerprint)
+  const connected = Boolean(data.settings.demoBankConnected)
+
+  const connectDemo = async () => {
+    if (busy) return
+    setBusy(true)
+    setNotice('')
+    setError('')
+
+    let added = 0
+    let duplicates = 0
+    const result = await saveData((current) => {
+      const seen = new Set(current.statementImports ?? [])
+      const expenses = []
+      const handled = new Set()
+
+      for (const transaction of DEMO_BANK_TRANSACTIONS) {
+        const eligibleDebit = transaction.type === 'debit' && transaction.method === 'UPI'
+        if (eligibleDebit) {
+          if (seen.has(transaction.fingerprint) || handled.has(transaction.fingerprint)) {
+            duplicates += 1
+            continue
+          }
+          expenses.push({
+            id: crypto.randomUUID(),
+            amount: transaction.amount,
+            category: transaction.category,
+            date: todayISO(),
+            note: transaction.description,
+            createdAt: new Date().toISOString(),
+            importedTransactionId: transaction.fingerprint,
+          })
+          added += 1
+        }
+        handled.add(transaction.fingerprint)
+      }
+
+      return {
+        ...current,
+        expenses: [...current.expenses, ...expenses],
+        statementImports: [...seen, ...handled],
+        settings: { ...current.settings, demoBankConnected: true },
+      }
+    })
+
+    setBusy(false)
+    if (result) {
+      setNotice(`${added} UPI debit ${added === 1 ? 'added' : 'added'} as an expense; ${duplicates} duplicate${duplicates === 1 ? '' : 's'} skipped; 2 credits/refunds ignored.`)
+    } else {
+      setError('The demo could not save to this device. No demo transactions were connected.')
+    }
+  }
+
+  const resetDemo = async () => {
+    if (busy) return
+    setBusy(true)
+    setNotice('')
+    setError('')
+    const demoIds = new Set(DEMO_BANK_TRANSACTIONS.map((transaction) => transaction.fingerprint))
+    const result = await saveData((current) => ({
+      ...current,
+      expenses: current.expenses.filter((expense) => !demoIds.has(expense.importedTransactionId)),
+      statementImports: (current.statementImports ?? []).filter((id) => !demoIds.has(id)),
+      settings: { ...current.settings, demoBankConnected: false },
+    }))
+    setBusy(false)
+    if (result) setNotice('Demo connection reset. You can run the simulation again.')
+    else setError('The demo could not be reset on this device. Please try again.')
+  }
+
+  return (
+    <section className="demo-bank-card" aria-labelledby="demo-bank-title">
+      <div className="card-heading">
+        <div>
+          <p className="eyebrow">Test automatic importing</p>
+          <h3 id="demo-bank-title">Demo bank connection <span className="demo-badge">Simulation</span></h3>
+          <p className="supporting-copy">Uses fake transactions in this browser only. No real bank, account data, or live syncing is involved.</p>
+        </div>
+        <span className="soft-icon"><Landmark size={18} /></span>
+      </div>
+      <ul className="demo-transaction-list">
+        {DEMO_BANK_TRANSACTIONS.map((transaction, index) => {
+          const duplicate = index === 1
+          const imported = importedIds.has(transaction.fingerprint)
+          const label = duplicate
+            ? 'Duplicate skipped'
+            : transaction.type === 'debit'
+              ? imported ? 'Imported as expense' : 'Eligible UPI debit'
+              : transaction.type === 'refund' ? 'Refund ignored' : 'Credit ignored'
+          return (
+            <li key={`${transaction.fingerprint}-${index}`}>
+              <span><strong>{transaction.description}</strong><small>{transaction.method} · {formatMoney(transaction.amount)}</small></span>
+              <span className={duplicate || imported ? 'demo-status-muted' : 'demo-status'}>{label}</span>
+            </li>
+          )
+        })}
+      </ul>
+      <div className="demo-bank-actions">
+        <button className="button button-primary" type="button" onClick={connectDemo} disabled={busy}>
+          {busy ? 'Running simulation…' : connected ? 'Run demo again' : 'Connect demo bank'}
+        </button>
+        <button className="button button-secondary" type="button" onClick={resetDemo} disabled={busy || (!connected && !demoDebitImported)}>
+          Reset demo
+        </button>
+        <span className="demo-connection-state" role="status">{connected ? 'Simulation connected' : 'Simulation not connected'}</span>
+      </div>
+      {notice && <p className="statement-notice" role="status">{notice}</p>}
+      {error && <p className="field-error" role="alert">{error}</p>}
+    </section>
   )
 }
 
@@ -935,6 +1114,7 @@ function StatementImporter({ data, saveData }) {
 }
 
 export function AnalyticsPage({ data, saveData }) {
+  const location = useLocation()
   const [month, setMonth] = useState(currentMonth)
   const [monthlyIncomeDraft, setMonthlyIncomeDraft] = useState('')
   const [incomeAmount, setIncomeAmount] = useState('')
@@ -967,11 +1147,11 @@ export function AnalyticsPage({ data, saveData }) {
     setMonthlyIncomeDraft(Number.isFinite(data.settings.monthlyIncome) ? String(data.settings.monthlyIncome) : '')
   }, [data.settings.monthlyIncome])
 
-  useEffect(() => {
-    const targetId = window.location.hash.slice(1)
+  useLayoutEffect(() => {
+    const targetId = location.hash.slice(1)
     if (!targetId) return
-    window.requestAnimationFrame(() => document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
-  }, [])
+    document.getElementById(targetId)?.scrollIntoView({ behavior: 'instant', block: 'start' })
+  }, [location.key, location.hash])
 
   const saveMonthlyIncome = async (event) => {
     event.preventDefault()

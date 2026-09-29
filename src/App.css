@@ -409,6 +409,122 @@ a {
   margin-bottom: 20px;
 }
 
+.overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+  align-items: stretch;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.overview-grid > * {
+  min-width: 0;
+}
+
+.overview-month-card {
+  display: flex;
+  min-height: 285px;
+  flex-direction: column;
+  justify-content: center;
+  padding: 22px 24px;
+}
+
+.overview-month-heading {
+  margin-bottom: 10px;
+}
+
+.overview-month-heading .eyebrow {
+  margin: 0;
+}
+
+.overview-month-heading h2,
+.overview-group-summary h2 {
+  margin: 4px 0 0;
+  color: #393746;
+  font-family: 'Manrope', sans-serif;
+  font-size: 17px;
+  letter-spacing: -0.4px;
+}
+
+.overview-month-row {
+  display: grid;
+  min-width: 0;
+  min-height: 43px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  column-gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid #f0eff4;
+  color: #777585;
+  font-size: 11px;
+}
+
+.overview-month-row > span {
+  min-width: 0;
+}
+
+.overview-month-row > strong {
+  color: #4a4857;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.overview-month-row > a {
+  justify-self: end;
+  color: #6a58df;
+  font-size: 10px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.overview-month-row > a:hover {
+  color: #4c3aba;
+}
+
+.overview-group-summary {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.65fr) minmax(0, 1.35fr);
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 18px;
+  padding: 19px 22px;
+}
+
+.overview-group-summary > div:first-child > .eyebrow {
+  margin: 0;
+}
+
+.group-balance-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  align-items: center;
+  gap: 14px;
+}
+
+.group-balance-summary > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.group-balance-summary > div > span {
+  color: #8c8a99;
+  font-size: 10px;
+}
+
+.group-balance-summary > div > strong {
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.group-balance-summary > .text-link {
+  justify-self: end;
+  white-space: nowrap;
+}
+
 .hero-card {
   position: relative;
   min-height: 285px;
@@ -1187,6 +1303,11 @@ a {
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
+.field input[type='date'] {
+  color-scheme: light;
+  font-variant-numeric: tabular-nums;
+}
+
 .field input::placeholder,
 .create-group-controls input::placeholder,
 .add-member-form input::placeholder,
@@ -1467,7 +1588,37 @@ a {
   font-size: 11px;
 }
 
-.history-card .expense-list {
+.history-month-groups {
+  margin-top: 7px;
+}
+
+.history-month-group + .history-month-group {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #f1f0f4;
+}
+
+.history-month-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.history-month-heading h2 {
+  margin: 0;
+  color: #514e5d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.history-month-heading span {
+  color: #93919e;
+  font-size: 10px;
+  text-align: right;
+}
+
+.history-month-group .expense-list {
   margin-top: 7px;
 }
 
@@ -2046,12 +2197,18 @@ a {
   gap: 15px;
 }
 
+.expense-dialog .field input[type='date'] {
+  min-height: 46px;
+  font-size: 14px;
+}
+
 .dialog-form .amount-field .amount-input-wrap {
   height: 52px;
   font-size: 18px;
 }
 
 .dialog-form .amount-field .amount-input-wrap input {
+  min-width: 0;
   font-size: 17px;
   font-weight: 700;
 }
@@ -2259,6 +2416,19 @@ a {
     grid-template-columns: 1fr;
   }
 
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-month-card {
+    min-height: 0;
+  }
+
+  .overview-group-summary {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
   .hero-card {
     min-height: 270px;
   }
@@ -2332,6 +2502,35 @@ a {
 
   .page-content {
     padding: 25px 17px calc(106px + env(safe-area-inset-bottom));
+  }
+
+  .overview-grid {
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .overview-month-card {
+    padding: 18px 17px;
+  }
+
+  .overview-month-row {
+    column-gap: 8px;
+  }
+
+  .overview-group-summary {
+    gap: 10px;
+    margin-bottom: 12px;
+    padding: 17px;
+  }
+
+  .group-balance-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .group-balance-summary > .text-link {
+    grid-column: 1 / -1;
+    justify-self: start;
   }
 
   .page-heading {
@@ -2747,10 +2946,14 @@ a {
   }
 
   .expense-dialog {
-    max-height: calc(100vh - 18px);
+    max-height: calc(100dvh - 18px);
     overflow-y: auto;
     padding: 20px 17px 16px;
     border-radius: 20px;
+  }
+
+  .expense-dialog .field input[type='date'] {
+    min-height: 48px;
   }
 
   .toast {
@@ -2777,6 +2980,15 @@ a {
 
   .page-heading {
     align-items: flex-start;
+  }
+
+  .overview-month-row.income {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .overview-month-row.income > a {
+    grid-column: 1 / -1;
+    justify-self: start;
   }
 
   .heading-action .month-picker select {
@@ -3054,6 +3266,50 @@ a {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
   gap: 16px;
+}
+
+.monthly-income-card {
+  margin-bottom: 16px;
+  padding: 20px 22px;
+  scroll-margin-top: 72px;
+}
+
+.monthly-income-card .card-heading > div {
+  min-width: 0;
+}
+
+.monthly-income-card .card-heading h2 {
+  margin: 3px 0 0;
+}
+
+.monthly-income-card .supporting-copy {
+  max-width: 620px;
+}
+
+.monthly-income-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 340px) auto;
+  align-items: end;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.monthly-income-form > .button {
+  justify-self: start;
+}
+
+.monthly-income-current {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #8c8a99;
+  font-size: 10px;
+}
+
+.monthly-income-current strong {
+  margin-left: 4px;
+  color: #4e8a69;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .cashflow-chart-card,
@@ -3757,8 +4013,22 @@ a {
   }
 
   .income-form {
-    grid-template-columns: 1fr 1fr;
-    gap: 9px;
+    grid-template-columns: 1fr;
+    gap: 11px;
+  }
+
+  .monthly-income-card {
+    padding: 16px 13px;
+    border-radius: 16px;
+  }
+
+  .monthly-income-form {
+    grid-template-columns: 1fr;
+    gap: 11px;
+  }
+
+  .monthly-income-form > .button {
+    justify-self: start;
   }
 
   .income-history-card {
@@ -3988,6 +4258,111 @@ a {
   letter-spacing: -0.3px;
 }
 
+.demo-bank-card {
+  display: grid;
+  gap: 14px;
+  padding: 17px;
+  border: 1px solid #e8e5f5;
+  border-radius: 15px;
+  background: linear-gradient(135deg, #fbfaff, #fff);
+}
+
+.demo-bank-card .card-heading {
+  align-items: flex-start;
+  margin: 0;
+}
+
+.demo-bank-card .card-heading > div {
+  min-width: 0;
+}
+
+.demo-bank-card h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 3px 0 0;
+  color: #302e40;
+  font-family: 'Manrope', sans-serif;
+  font-size: 15px;
+  letter-spacing: -0.3px;
+}
+
+.demo-bank-card .supporting-copy {
+  max-width: 590px;
+  margin-top: 6px;
+}
+
+.demo-badge {
+  padding: 4px 7px;
+  border-radius: 7px;
+  background: #f0eeff;
+  color: #6251d4;
+  font: 700 9px 'DM Sans', sans-serif;
+  letter-spacing: 0.35px;
+  text-transform: uppercase;
+}
+
+.demo-transaction-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.demo-transaction-list > li {
+  display: flex;
+  min-width: 0;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  border-top: 1px solid #f0eff4;
+}
+
+.demo-transaction-list > li > span:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.demo-transaction-list strong {
+  overflow-wrap: anywhere;
+  color: #514f5d;
+  font-size: 11px;
+}
+
+.demo-transaction-list small {
+  color: #92909d;
+  font-size: 9px;
+}
+
+.demo-transaction-list > li > span:last-child {
+  flex: 0 0 auto;
+  color: #4c936e;
+  font-size: 9px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.demo-transaction-list > li > .demo-status-muted {
+  color: #898795;
+}
+
+.demo-bank-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+}
+
+.demo-connection-state {
+  margin-left: auto;
+  color: #898795;
+  font-size: 10px;
+}
+
 .statement-file-button {
   display: flex;
   min-height: 54px;
@@ -4028,6 +4403,23 @@ a {
 .statement-preview {
   display: grid;
   gap: 14px;
+}
+
+.demo-bank-card {
+  padding: 14px 12px;
+}
+
+.demo-bank-actions {
+  align-items: stretch;
+}
+
+.demo-bank-actions .button {
+  flex: 1 1 auto;
+}
+
+.demo-connection-state {
+  flex-basis: 100%;
+  margin-left: 0;
 }
 
 .statement-preview-heading {
