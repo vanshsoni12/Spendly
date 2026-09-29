@@ -23,3 +23,11 @@ npm run dev
 - Responsive keyboard-accessible layout with five-item mobile navigation; income, calendar, recurring, and statement tools are accessible from Settings.
 
 Run `npm run build` to create a production build and `npm run lint` to check the source.
+
+## Combined version
+
+This branch combines the redesigned interface with month-grouped history, date and account-type filters, CSV and print/PDF exports, and the simulated bank import from the history-fix branch. Group history links to the group for editing.
+
+Financial data remains local to this browser and is now stored separately for each signed-in account. Old unassigned device data is preserved. To recover it, sign in to the owning account, open Settings → Restore previous device data, and confirm the replacement. Export any current account data first if you need to retain it. The old record is not deleted or automatically assigned to an account.
+
+Saves are serialized and update the screen only after storage succeeds. Run `npm test` for regression checks covering account storage keys, legacy preservation, recurring-group migration, failed saves, and concurrent updates. These use a deterministic storage adapter; live Supabase sign-in and browser IndexedDB integration still require browser testing.

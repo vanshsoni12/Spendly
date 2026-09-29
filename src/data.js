@@ -15,7 +15,10 @@ export const CATEGORIES = [
 const DATABASE_NAME = 'rupee-wise'
 const DATABASE_VERSION = 1
 const STORE_NAME = 'app-data'
-const RECORD_ID = 'primary'
+function accountRecordId(userId) {
+  if (typeof userId !== 'string' || !userId) throw new Error('Sign in before accessing expense data.')
+  return `account:${userId}`
+}
 
 export function emptyAppData() {
   return {
@@ -43,13 +46,14 @@ async function getDatabase() {
   })
 }
 
-export async function readAppData() {
+export async function readAppData(userId) {
+  const recordId = accountRecordId(userId)
   const database = await getDatabase()
-  const record = await database.get(STORE_NAME, RECORD_ID)
+  const record = await database.get(STORE_NAME, recordId)
   if (record?.data) return migrateAppData(record.data)
 
   const initialData = emptyAppData()
-  await database.put(STORE_NAME, { id: RECORD_ID, data: initialData })
+  await database.put(STORE_NAME, { id: recordId, data: initialData })
   return initialData
 }
 
@@ -63,7 +67,7 @@ export function migrateAppData(value) {
       : ''
     return {
       ...rule,
-      scope: rule.scope ?? 'personal',
+      scope: rule.scope ?? (rule.groupId ? 'group' : 'personal'),
       frequency,
       interval: rule.interval ?? (frequency === 'quarterly' ? 3 : frequency === 'semiannual' ? 6 : frequency === 'yearly' ? 12 : 1),
       intervalUnit: rule.intervalUnit ?? (frequency === 'weekly' ? 'week' : 'month'),
@@ -186,9 +190,10 @@ export function applyRecurringExpenses(value, now = new Date()) {
   return expenses.length === value.expenses.length && !groupsChanged ? value : { ...value, expenses, groups }
 }
 
-export async function writeAppData(data) {
+export async function writeAppData(data, userId) {
+  const recordId = accountRecordId(userId)
   const database = await getDatabase()
-  await database.put(STORE_NAME, { id: RECORD_ID, data })
+  await database.put(STORE_NAME, { id: recordId, data })
 }
 
 export function validateBackup(value) {
@@ -443,4 +448,11 @@ export function validateBackup(value) {
       name: typeof value.settings.name === 'string' ? value.settings.name : '',
     },
   }
+}
+
+// Old versions had one unassigned device record. Never assign it automatically.
+export async function readLegacyAppData() {
+  const database = await getDatabase()
+  const record = await database.get(STORE_NAME, 'primary')
+  return record?.data ? migrateAppData(record.data) : null
 }

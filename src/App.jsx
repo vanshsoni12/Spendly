@@ -20,8 +20,9 @@ import {
 import { BrowserRouter, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { BottomNavigation, CategorySelect, FloatingAddExpense, ReceiptField } from './components'
 import { applyRecurringExpenses, CATEGORIES, emptyAppData, readAppData, validateBackup, writeAppData } from './data'
-import { formatMoney, makeId, todayISO } from './utils'
+import { formatDate, formatMoney, makeId, todayISO } from './utils'
 import { AccountPage, ActivityPage, AnalyticsPage, BudgetPage, CalendarPage, GroupDetailPage, GroupsPage, HistoryPage, HomePage, PersonalPage, RecurringPage, SettingsPage } from './pages'
+import { createSaveQueue } from './saveQueue'
 import './App.css'
 
 const AuthPage = lazy(() => import('./AuthPage'))
@@ -147,6 +148,39 @@ function AppShell({ data, saveData, storageError, clearStorageError, session, ch
     }
   }
 
+  const exportPdf = () => {
+    const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[character])
+    const rows = [
+      ...data.expenses.map((expense) => ({ date: expense.date, label: expense.note || expense.category, category: expense.category, amount: expense.amount, group: 'Personal', type: 'Expense' })),
+      ...data.income.map((item) => ({ date: item.date, label: item.source || 'Income', category: 'Income', amount: item.amount, group: 'Personal', type: 'Income' })),
+      ...data.groups.flatMap((group) => group.expenses.map((expense) => ({
+        date: expense.date,
+        label: expense.title || expense.note || expense.category || 'Shared expense',
+        category: expense.category || 'Shared',
+        amount: expense.amount,
+        group: group.name,
+        type: 'Group expense',
+      }))),
+    ].sort((a, b) => b.date.localeCompare(a.date))
+    const tableRows = rows.map((row) => `<tr><td>${escapeHtml(formatDate(row.date, { short: true }))}</td><td>${escapeHtml(row.label)}</td><td>${escapeHtml(row.category)}</td><td>${escapeHtml(row.group)}</td><td>${escapeHtml(row.type)}</td><td class="amount">${escapeHtml(formatMoney(row.amount, { decimals: true }))}</td></tr>`).join('')
+    const reportWindow = window.open('', '_blank')
+    if (!reportWindow) {
+      setNotice({ type: 'error', text: 'Allow pop-ups to print or save your report as a PDF.' })
+      return
+    }
+    reportWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Spendly transaction report</title><style>
+      body{font:14px Arial,sans-serif;color:#342f32;margin:36px}h1{font-size:24px;margin:0 0 6px}.meta{color:#756c70;margin:0 0 22px}
+      table{width:100%;border-collapse:collapse;font-size:11px}th,td{padding:9px 7px;border-bottom:1px solid #eadfe1;text-align:left}th{background:#fff3f1;color:#5c4347}
+      .amount{text-align:right;white-space:nowrap}@media print{body{margin:15mm}}
+      </style></head><body><h1>Spendly transaction report</h1><p class="meta">Generated ${escapeHtml(formatDate(todayISO(), { short: true }))} · ${rows.length} records · Stored on this device</p>
+      <table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Account</th><th>Type</th><th class="amount">Amount</th></tr></thead><tbody>${tableRows || '<tr><td colspan="6">No transactions to report.</td></tr>'}</tbody></table>
+      <script>window.addEventListener('load',()=>window.print())</script></body></html>`)
+    reportWindow.document.close()
+    reportWindow.addEventListener('afterprint', () => reportWindow.close(), { once: true })
+  }
+
   const exportBackup = () => {
     try {
       const backup = {
@@ -203,7 +237,7 @@ function AppShell({ data, saveData, storageError, clearStorageError, session, ch
         {notice && <div className={`toast toast-${notice.type}`} role={notice.type === 'error' ? 'alert' : 'status'}><span>{notice.type === 'success' ? <Check size={17} /> : <X size={17} />}</span>{notice.text}<button type="button" aria-label="Dismiss message" onClick={() => setNotice(null)}><X size={15} /></button></div>}
 
         <main className="page-content" id="main-content">
-          {typeof children === 'function' ? children({ data, saveData, setExpenseDialog: showExpenseDialog, onAddExpense: openAddExpense, onDeleteExpense: deleteExpense, onExport: exportBackup, onExportCsv: exportCsv, onImport: importBackup }) : children}
+          {typeof children === 'function' ? children({ data, saveData, setExpenseDialog: showExpenseDialog, onAddExpense: openAddExpense, onDeleteExpense: deleteExpense, onExport: exportBackup, onExportCsv: exportCsv, onExportPdf: exportPdf, onImport: importBackup }) : children}
         </main>
 
         <footer className="app-footer"><span>₹</span> A little more ease with your money, every day.</footer>
@@ -561,7 +595,7 @@ function ExpenseDialog({ expense, onClose, onSave }) {
 function PageRoutes({ data, saveData, storageError, clearStorageError, session, onSignOut }) {
   return (
     <AppShell data={data} saveData={saveData} storageError={storageError} clearStorageError={clearStorageError} session={session}>
-      {({ data: appData, saveData: persist, setExpenseDialog, onDeleteExpense, onExport, onExportCsv, onImport }) => (
+      {({ data: appData, saveData: persist, setExpenseDialog, onDeleteExpense, onExport, onExportCsv, onExportPdf, onImport }) => (
         <Routes>
           <Route path="/" element={<HomePage data={appData} setExpenseDialog={setExpenseDialog} onDeleteExpense={onDeleteExpense} />} />
           <Route path="/groups" element={<GroupsPage data={appData} saveData={persist} userId={session.user.id} />} />
@@ -573,7 +607,7 @@ function PageRoutes({ data, saveData, storageError, clearStorageError, session, 
           <Route path="/analytics" element={<AnalyticsPage data={appData} saveData={persist} />} />
           <Route path="/calendar" element={<CalendarPage data={appData} />} />
           <Route path="/recurring" element={<RecurringPage data={appData} saveData={persist} userId={session.user.id} />} />
-          <Route path="/settings" element={<SettingsPage data={appData} saveData={persist} onExport={onExport} onExportCsv={onExportCsv} onImport={onImport} />} />
+          <Route path="/settings" element={<SettingsPage data={appData} saveData={persist} onExport={onExport} onExportCsv={onExportCsv} onExportPdf={onExportPdf} onImport={onImport} />} />
           <Route path="/account" element={<AccountPage user={session.user} onSignOut={onSignOut} />} />
           <Route path="*" element={<HomePage data={appData} setExpenseDialog={setExpenseDialog} onDeleteExpense={onDeleteExpense} />} />
         </Routes>
@@ -589,69 +623,20 @@ function AuthenticatedRoutes({ data, saveData, storageError, clearStorageError, 
   return <PageRoutes data={data} saveData={saveData} storageError={storageError} clearStorageError={clearStorageError} session={session} onSignOut={onSignOut} />
 }
 
-function App() {
+function AccountApp({ session, onSignOut }) {
   const [data, setData] = useState(null)
   const [storageError, setStorageError] = useState('')
   const dataRef = useRef(null)
+  const saveQueue = useRef(null)
   const [loadError, setLoadError] = useState('')
   const [loading, setLoading] = useState(true)
-  const [session, setSession] = useState(null)
-  const [authLoading, setAuthLoading] = useState(true)
-  const [authError, setAuthError] = useState('')
-  const authEventSeen = useRef(false)
-
-  useEffect(() => {
-    let active = true
-    let unsubscribe = () => {}
-    import('./lib/supabase').then(({ supabase, supabaseConfigurationError }) => {
-      if (!active) return
-      if (!supabase) {
-        setAuthError(supabaseConfigurationError)
-        setAuthLoading(false)
-        return
-      }
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-        authEventSeen.current = true
-        if (active) {
-          setSession(nextSession)
-          setAuthError('')
-          setAuthLoading(false)
-        }
-      })
-      unsubscribe = () => subscription.unsubscribe()
-      return supabase.auth.getSession().then(({ data: sessionData, error }) => {
-        if (!active || authEventSeen.current) return
-        if (error) {
-          setAuthError(error.message)
-        } else {
-          setSession(sessionData.session)
-        }
-        setAuthLoading(false)
-      })
-    }).catch((error) => {
-      if (!active || authEventSeen.current) return
-      setAuthError(error instanceof Error ? error.message : 'Could not check your sign-in status.')
-      setAuthLoading(false)
-    })
-    return () => {
-      active = false
-      unsubscribe()
-    }
-  }, [])
-
-  const signOut = async () => {
-    const { supabase } = await import('./lib/supabase')
-    if (!supabase) throw new Error('Authentication is not configured.')
-    const { error } = await supabase.auth.signOut()
-    if (error) throw error
-  }
 
   const loadData = useCallback(async () => {
     setLoading(true)
     setLoadError('')
     try {
-      const storedData = applyRecurringExpenses(await readAppData())
-      await writeAppData(storedData)
+      const storedData = applyRecurringExpenses(await readAppData(session.user.id))
+      await writeAppData(storedData, session.user.id)
       dataRef.current = storedData
       setData(storedData)
     } catch (error) {
@@ -659,14 +644,14 @@ function App() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [session.user.id])
 
   useEffect(() => {
     let active = true
-    readAppData()
+    readAppData(session.user.id)
       .then((loadedData) => {
         const storedData = applyRecurringExpenses(loadedData)
-        return writeAppData(storedData).then(() => storedData)
+        return writeAppData(storedData, session.user.id).then(() => storedData)
       })
       .then((storedData) => {
         if (!active) return
@@ -682,25 +667,22 @@ function App() {
     return () => {
       active = false
     }
-  }, [])
+  }, [session.user.id])
 
-  const saveData = async (updater) => {
-    if (!dataRef.current) {
-      setStorageError('Local data has not finished loading yet. Please try again.')
-      return false
+  const saveData = (updater) => {
+    if (!saveQueue.current) {
+      saveQueue.current = createSaveQueue({
+        read: () => dataRef.current,
+        write: (next) => writeAppData(next, session.user.id),
+        commit: (next) => {
+          dataRef.current = next
+          setData(next)
+          setStorageError('')
+        },
+        onError: (error) => setStorageError(error.message),
+      })
     }
-    const updatedData = typeof updater === 'function' ? updater(dataRef.current) : updater
-    dataRef.current = updatedData
-    setData(updatedData)
-    try {
-      await writeAppData(updatedData)
-      setStorageError('')
-      return true
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : 'Your browser could not save local data.'
-      setStorageError(detail)
-      return false
-    }
+    return saveQueue.current(updater)
   }
 
   if (loading) {
@@ -719,21 +701,68 @@ function App() {
     )
   }
 
-  return (
-    <BrowserRouter>
-      {authLoading
-        ? <div className="loading-screen"><span className="loading-mark">₹</span><p>Checking your account…</p></div>
-        : <AuthenticatedRoutes
-            data={data ?? emptyAppData()}
-            saveData={saveData}
-            storageError={storageError}
-            clearStorageError={() => setStorageError('')}
-            session={session}
-            onSignOut={signOut}
-            authError={authError}
-          />}
-    </BrowserRouter>
-  )
+  return <AuthenticatedRoutes data={data ?? emptyAppData()} saveData={saveData}
+    storageError={storageError} clearStorageError={() => setStorageError('')}
+    session={session} onSignOut={onSignOut} />
+}
+
+function App() {
+  const [session, setSession] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [authError, setAuthError] = useState('')
+
+  useEffect(() => {
+    let authEventSeen = false
+    let active = true
+    let unsubscribe = () => {}
+    import('./lib/supabase').then(({ supabase, supabaseConfigurationError }) => {
+      if (!active) return
+      if (!supabase) {
+        setAuthError(supabaseConfigurationError)
+        setAuthLoading(false)
+        return
+      }
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+        authEventSeen = true
+        if (active) {
+          setSession(nextSession)
+          setAuthError('')
+          setAuthLoading(false)
+        }
+      })
+      unsubscribe = () => subscription.unsubscribe()
+      return supabase.auth.getSession().then(({ data: sessionData, error }) => {
+        if (!active || authEventSeen) return
+        if (error) {
+          setAuthError(error.message)
+        } else {
+          setSession(sessionData.session)
+        }
+        setAuthLoading(false)
+      })
+    }).catch((error) => {
+      if (!active || authEventSeen) return
+      setAuthError(error instanceof Error ? error.message : 'Could not check your sign-in status.')
+      setAuthLoading(false)
+    })
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [])
+
+  const signOut = async () => {
+    const { supabase } = await import('./lib/supabase')
+    if (!supabase) throw new Error('Authentication is not configured.')
+    const { error } = await supabase.auth.signOut()
+    if (error) throw error
+  }
+
+  return <BrowserRouter>
+    {authLoading ? <div className="loading-screen"><p>Checking your account…</p></div>
+      : session ? <AccountApp key={session.user.id} session={session} onSignOut={signOut} />
+        : <AuthenticatedRoutes session={null} authError={authError} />}
+  </BrowserRouter>
 }
 
 export default App
