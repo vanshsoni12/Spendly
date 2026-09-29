@@ -5,14 +5,18 @@ import {
   Clapperboard,
   Ellipsis,
   HeartPulse,
+  HandCoins,
   ReceiptIndianRupee,
   ImagePlus,
+  Plus,
   ShoppingBag,
   Utensils,
+  Users,
   X,
 } from 'lucide-react'
+import { Link, NavLink, useLocation } from 'react-router-dom'
 import { CATEGORIES } from './data'
-import { compressReceipt } from './utils'
+import { formatDate, formatMoney, compressReceipt } from './utils'
 
 const categoryIcons = {
   food: Utensils,
@@ -70,6 +74,105 @@ export function PageHeading({ eyebrow, title, description, action }) {
       </div>
       {action && <div className="heading-action">{action}</div>}
     </div>
+  )
+}
+
+export function BottomNavigation({ items }) {
+  const { pathname } = useLocation()
+  const isPersonalRoute = ['/personal', '/history', '/budget', '/analytics', '/calendar', '/recurring'].includes(pathname)
+  return (
+    <nav className="bottom-nav" aria-label="Main navigation">
+      {items.map(({ to, label, icon: Icon, end }) => (
+        <NavLink className={({ isActive }) => `bottom-nav-link ${(label === 'Personal' ? isPersonalRoute : isActive) ? 'bottom-nav-active' : ''}`} key={to} to={to} end={end} aria-label={label}>
+          <Icon size={19} strokeWidth={1.8} aria-hidden="true" /><span>{label}</span>
+        </NavLink>
+      ))}
+    </nav>
+  )
+}
+
+export function FloatingAddExpense({ onClick }) {
+  return (
+    <button className="floating-add-expense" type="button" onClick={onClick}>
+      <Plus size={21} strokeWidth={2.4} /><span>Add expense</span>
+    </button>
+  )
+}
+
+export function BalanceSummary({ balance = null, label = 'Overall group balance', hint }) {
+  const known = balance != null
+  const owed = balance > 0.005
+  const owes = balance < -0.005
+  return (
+    <section className={`balance-summary ${owed ? 'balance-summary-owed' : owes ? 'balance-summary-owes' : ''}`} aria-label={label}>
+      <span className="balance-summary-icon"><HandCoins size={19} /></span>
+      <div>
+        <p>{label}</p>
+        <strong>{known ? owed ? 'You are owed' : owes ? 'You owe' : 'All settled' : 'Set your name to see your balance'}</strong>
+        {known && <b>{formatMoney(Math.abs(balance))}</b>}
+        {hint && <small>{hint}</small>}
+      </div>
+    </section>
+  )
+}
+
+export function GroupListItem({ group, balance = null, memberBalances = [] }) {
+  const known = balance != null
+  const owing = balance < -0.005
+  const owed = balance > 0.005
+  return (
+    <Link className="group-list-item" to={`/groups/${group.id}`}>
+      <span className="group-list-avatar"><Users size={19} /></span>
+      <span className="group-list-main">
+        <strong>{group.name}</strong>
+        <small>{group.members.length} {group.members.length === 1 ? 'member' : 'members'} · {group.expenses.length} {group.expenses.length === 1 ? 'expense' : 'expenses'}</small>
+        {memberBalances.length > 0 && <span className="group-list-members">{memberBalances.slice(0, 3).map(({ member, balance: memberBalance }) => <span key={member.id}>{member.name}: {memberBalance > 0.005 ? 'gets ' : memberBalance < -0.005 ? 'owes ' : ''}{formatMoney(Math.abs(memberBalance))}</span>)}</span>}
+      </span>
+      <span className={`group-list-balance ${owed ? 'balance-credit' : owing ? 'balance-debt' : ''}`}>
+        <strong>{known ? owed ? 'You are owed' : owing ? 'You owe' : 'All settled' : 'Balance unavailable'}</strong>
+        {known && <b>{formatMoney(Math.abs(balance))}</b>}
+      </span>
+    </Link>
+  )
+}
+
+export function MemberBalance({ member, balance }) {
+  const gets = balance > 0.005
+  const owes = balance < -0.005
+  return (
+    <div className="member-balance-item">
+      <span className="member-initial">{member.name.trim().charAt(0).toUpperCase()}</span>
+      <span className="member-balance-name">{member.name}</span>
+      <span className={`member-balance ${gets ? 'balance-credit' : owes ? 'balance-debt' : ''}`}>
+        {gets ? 'gets ' : owes ? 'owes ' : ''}{formatMoney(Math.abs(balance))}
+      </span>
+    </div>
+  )
+}
+
+export function TransactionItem({ date, category = 'other', title, subtitle, amount, result, receipt, actions }) {
+  return (
+    <article className="transaction-item">
+      <span className="transaction-date">{formatDate(date, { short: true })}</span>
+      <CategoryIcon category={category} size={19} />
+      <span className="transaction-copy"><strong>{title}</strong><small>{subtitle}</small>{receipt && <ReceiptThumbnail receipt={receipt} />}</span>
+      <span className="transaction-value"><strong>{formatMoney(amount)}</strong>{result && <small>{result}</small>}</span>
+      {actions && <span className="transaction-actions">{actions}</span>}
+    </article>
+  )
+}
+
+export function ActivityItem({ date, createdAt, category = 'other', title, detail, amount, tone = 'neutral' }) {
+  const eventTime = createdAt && Number.isFinite(new Date(createdAt).getTime())
+    ? new Date(createdAt).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })
+    : ''
+  return (
+    <article className="activity-item">
+      <time className="activity-date" dateTime={eventTime ? createdAt : date}>{formatDate(date, { short: true })}{eventTime && <small>{eventTime}</small>}</time>
+      <CategoryIcon category={category} size={18} />
+      <span className="activity-copy"><strong>{title}</strong><small>{detail}</small></span>
+      {amount != null && <strong className={`activity-amount activity-${tone}`}>{formatMoney(Math.abs(amount))}</strong>}
+    </article>
   )
 }
 

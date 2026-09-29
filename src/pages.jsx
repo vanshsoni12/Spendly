@@ -1,5 +1,6 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  Activity,
   ArrowDownRight,
   ArrowRight,
   ArrowUpRight,
@@ -13,10 +14,12 @@ import {
   HandCoins,
   History,
   Landmark,
+  LogOut,
   PiggyBank,
   Plus,
   Repeat,
   Search,
+  Settings2,
   ShieldCheck,
   Sparkles,
   TrendingDown,
@@ -24,15 +27,22 @@ import {
   Users,
   Wallet,
   X,
+  BarChart3,
+  CircleDollarSign,
 } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation, useParams } from 'react-router-dom'
 import {
   CategoryIcon,
   CategorySelect,
+  ActivityItem,
+  BalanceSummary,
   EmptyState,
+  GroupListItem,
+  MemberBalance,
   PageHeading,
   ReceiptField,
   ReceiptThumbnail,
+  TransactionItem,
 } from './components'
 import { applyRecurringExpenses, CATEGORIES, getNextRecurringDate, getRecurringDatesBetween } from './data'
 import { currentMonth, formatDate, formatMoney, formatMonth, todayISO } from './utils'
@@ -172,100 +182,148 @@ function BudgetStatus({ budget, spent, hasBudget = budget > 0, compact = false }
   )
 }
 
-export function HomePage({ data, setExpenseDialog, onAddExpense, onDeleteExpense }) {
+export function HomePage({ data, setExpenseDialog, onDeleteExpense }) {
   const month = currentMonth()
   const thisMonth = monthExpenses(data.expenses, month)
   const spent = thisMonth.reduce((sum, expense) => sum + expense.amount, 0)
   const budget = data.budgets[month] ?? 0
   const hasBudget = Object.hasOwn(data.budgets, month)
   const monthlyIncome = data.income.filter((item) => item.date.slice(0, 7) === month).reduce((sum, item) => sum + item.amount, 0)
-  const now = new Date()
-  const daysRemaining = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() - now.getDate() + 1
-  const dailySafeToSpend = hasBudget ? Math.max(0, budget - spent) / daysRemaining : null
-  const recentExpenses = [...data.expenses].sort(expenseDateOrder).slice(0, 5)
-  const categoryTotals = CATEGORIES
-    .map((category) => ({
-      category,
-      total: thisMonth.filter((expense) => expense.category === category).reduce((sum, expense) => sum + expense.amount, 0),
-    }))
-    .filter((item) => item.total > 0)
-    .sort((a, b) => b.total - a.total)
-    .slice(0, 4)
-  const largestCategory = categoryTotals[0]?.total ?? 0
   const firstName = data.settings.name.trim().split(/\s+/)[0]
+  const userName = data.settings.name
+  const groupSummaries = data.groups.map((group) => ({
+    ...group,
+    userBalance: getUserGroupBalance(group, userName),
+    memberBalances: [...calculateGroupBalances(group)].map(([id, balance]) => ({
+      member: group.members.find((member) => member.id === id),
+      balance,
+    })).filter(({ member }) => member),
+    monthTotal: group.expenses
+      .filter((expense) => expense.date.slice(0, 7) === month)
+      .reduce((sum, expense) => sum + expense.amount, 0),
+  }))
+  const identifiedBalances = groupSummaries.map(({ userBalance }) => userBalance).filter((balance) => balance != null)
+  const overallGroupBalance = identifiedBalances.length
+    ? identifiedBalances.reduce((sum, balance) => sum + balance, 0)
+    : null
+  const recentTransactions = [
+    ...data.expenses.map((expense) => ({
+      id: expense.id,
+      date: expense.date,
+      category: expense.category,
+      title: expense.note?.trim() || expense.category,
+      subtitle: 'Personal expense',
+      amount: expense.amount,
+      receipt: expense.receipt,
+      personalExpense: expense,
+    })),
+    ...data.groups.flatMap((group) => group.expenses.map((expense) => {
+      const member = findUserMember(group, userName)
+      const share = getExpenseShare(expense, member?.id)
+      const delta = member?.id === expense.paidById ? expense.amount - share : -share
+      return {
+        id: `${group.id}-${expense.id}`,
+        date: expense.date,
+        category: expense.category ?? 'other',
+        title: expense.title,
+        subtitle: `${group.name} · Paid by ${group.members.find((item) => item.id === expense.paidById)?.name ?? 'a member'}`,
+        amount: expense.amount,
+        result: member && Math.abs(delta) > 0.005 ? `${delta > 0 ? 'You get back' : 'You owe'} ${formatMoney(Math.abs(delta))}` : null,
+        receipt: expense.receipt,
+      }
+    })),
+  ].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5)
+  const upcomingPayments = data.recurringExpenses
+    .filter((item) => item.active)
+    .map((item) => {
+      const group = item.scope === 'group' ? data.groups.find((entry) => entry.id === item.groupId) : null
+      const nextDue = getNextRecurringDate(item, group ? group.expenses : data.expenses)
+      return nextDue ? { ...item, groupName: group?.name, nextDue } : null
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.nextDue.localeCompare(b.nextDue))
+    .slice(0, 4)
+  const monthlyBalance = monthlyIncome - spent
 
   return (
     <>
       <PageHeading
         eyebrow={new Intl.DateTimeFormat('en-IN', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date())}
-        title={firstName ? `A little more clarity, ${firstName}.` : 'A little more clarity.'}
-        description="Your money, thoughtfully in view."
-        action={<button className="button button-primary" onClick={onAddExpense} type="button"><Plus size={18} /> Add expense</button>}
+        title={firstName ? `Your money, ${firstName}.` : 'Your money, in view.'}
+        description="A clear view of what matters this month."
       />
 
-      <section className="dashboard-grid" aria-label="Monthly spending overview">
-        <article className={`hero-card ${hasBudget && spent > budget ? 'hero-over' : ''}`}>
-          <div className="hero-card-top">
-            <span className="hero-month"><CalendarDays size={15} /> {formatMonth(month)}</span>
-            <span className="hero-orb" aria-hidden="true"><Sparkles size={18} /></span>
+      <BalanceSummary balance={overallGroupBalance} label="Overall group balance" hint={overallGroupBalance == null ? 'Add your name in Settings to match your group member balances.' : 'Across all your shared groups'} />
+
+      <section className="home-summary-grid" aria-label={`${formatMonth(month)} financial summary`}>
+        <article className={`home-balance-card ${monthlyBalance < 0 ? 'home-balance-negative' : ''}`}>
+          <div className="home-balance-top"><span><CalendarDays size={15} /> {formatMonth(month)}</span><span className="home-balance-mark">₹</span></div>
+          <p className="home-balance-label">Monthly balance</p>
+          <strong className="home-balance-value">{monthlyBalance < 0 ? '−' : ''}{formatMoney(Math.abs(monthlyBalance), { decimals: true })}</strong>
+          <div className="home-balance-totals">
+            <div><span>Income</span><strong>{formatMoney(monthlyIncome)}</strong></div>
+            <div><span>Personal spending</span><strong>{formatMoney(spent)}</strong></div>
           </div>
+          <span className="home-balance-decoration" aria-hidden="true" />
+        </article>
+
+        <article className="card home-budget-card">
+          <div className="card-heading"><div><p className="eyebrow">Your personal plan</p><h2>Monthly budget</h2></div><span className="soft-icon"><Wallet size={17} /></span></div>
           <BudgetStatus budget={budget} spent={spent} hasBudget={hasBudget} />
-          <div className="hero-separator" />
-          <div className="hero-totals">
-            <div><span>Monthly budget</span><strong>{formatMoney(budget)}</strong></div>
-            <div><span>Total spent</span><strong>{formatMoney(spent)}</strong></div>
+          <Link className="text-link home-budget-link" to="/budget">Manage budget <ArrowRight size={14} /></Link>
+        </article>
+      </section>
+
+      <section className="home-content-grid">
+        <article className="card home-personal-card">
+          <div className="card-heading"><div><p className="eyebrow">Just for you</p><h2>Personal</h2></div><span className="home-section-icon personal-section-icon"><Wallet size={18} /></span></div>
+          <div className="home-personal-metrics">
+            <div><span>Spent this month</span><strong>{formatMoney(spent)}</strong></div>
+            <div><span>Income this month</span><strong>{formatMoney(monthlyIncome)}</strong></div>
+            <div><span>Balance</span><strong className={monthlyBalance < 0 ? 'cashflow-negative' : ''}>{monthlyBalance < 0 ? '−' : ''}{formatMoney(Math.abs(monthlyBalance))}</strong></div>
           </div>
-          <div className="hero-decoration hero-decoration-one" aria-hidden="true" />
-          <div className="hero-decoration hero-decoration-two" aria-hidden="true" />
+          <Link className="text-link" to="/history">View personal history <ArrowRight size={14} /></Link>
         </article>
 
-        <article className="card category-card">
-          <div className="card-heading">
-            <div><p className="eyebrow">Where it goes</p><h2>Spending by category</h2></div>
-            <span className="soft-icon"><Filter size={17} /></span>
-          </div>
-          {categoryTotals.length ? (
-            <ul className="category-breakdown">
-              {categoryTotals.map(({ category, total }) => (
-                <li className="category-breakdown-row" key={category}>
-                  <CategoryIcon category={category} size={18} />
-                  <span className="category-breakdown-name">{category[0].toUpperCase() + category.slice(1)}</span>
-                  <div className="category-track"><span style={{ width: `${Math.max((total / largestCategory) * 100, 4)}%` }} /></div>
-                  <strong>{formatMoney(total)}</strong>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState icon={Sparkles} title="A fresh start">Add an expense to see your spending patterns.</EmptyState>
-          )}
+        <article className="card home-groups-card">
+          <div className="card-heading"><div><p className="eyebrow">Shared with others</p><h2>Groups</h2></div><Link className="text-link" to="/groups">All groups <ArrowRight size={14} /></Link></div>
+          {groupSummaries.length ? (
+            <ul className="home-group-list">{groupSummaries.slice(0, 3).map((group) => (
+              <li key={group.id}><Link className="home-group-link" to={`/groups/${group.id}`}><span className="home-group-avatar"><Users size={17} /></span><span className="home-group-info"><strong>{group.name}</strong><small>{group.members.length} {group.members.length === 1 ? 'member' : 'members'}</small></span><span className="home-group-total"><strong>{formatMoney(group.monthTotal)}</strong><small>this month</small></span></Link></li>
+            ))}</ul>
+          ) : <EmptyState icon={Users} title="No groups yet">Create a group to keep shared spending together.</EmptyState>}
         </article>
       </section>
 
-      <section className="quick-insight-grid" aria-label="Daily spending and cash flow">
-        <article className="card quick-insight-card daily-insight">
-          <span className="insight-icon"><CalendarDays size={18} /></span>
-          <div><p className="eyebrow">A gentle daily guide</p><h2>{dailySafeToSpend === null ? 'Set a budget to begin' : `${formatMoney(dailySafeToSpend)} / day`}</h2><p>Safe to spend each day for the rest of {formatMonth(month)}.</p></div>
+      <section className="home-lower-grid">
+        <article className="card recent-card">
+          <div className="card-heading"><div><p className="eyebrow">The latest</p><h2>Recent expenses</h2></div><Link className="text-link" to="/history">See all <ArrowRight size={15} /></Link></div>
+          {recentTransactions.length ? <div className="transaction-list">{recentTransactions.map((item) => (
+            <TransactionItem
+              key={item.id}
+              date={item.date}
+              category={item.category}
+              title={item.title}
+              subtitle={item.subtitle}
+              amount={item.amount}
+              result={item.result}
+              receipt={item.receipt}
+              actions={item.personalExpense && <>
+                <button className="icon-button small" type="button" onClick={() => setExpenseDialog(item.personalExpense)} aria-label={`Edit ${item.title} expense`}><span aria-hidden="true">✎</span></button>
+                <button className="icon-button small delete-button" type="button" onClick={() => onDeleteExpense(item.personalExpense)} aria-label={`Delete ${item.title} expense`}><X size={15} /></button>
+              </>}
+            />
+          ))}</div> : <EmptyState icon={Wallet} title="Your story starts here">Add a personal or group expense to see it here.</EmptyState>}
         </article>
-        <article className="card quick-insight-card cashflow-insight">
-          <span className="insight-icon"><TrendingUp size={18} /></span>
-          <div><p className="eyebrow">Monthly cash flow</p><h2 className={monthlyIncome - spent < 0 ? 'cashflow-negative' : ''}>{formatMoney(monthlyIncome - spent)}</h2><p>{formatMoney(monthlyIncome)} income <span aria-hidden="true">·</span> {formatMoney(spent)} spending</p></div>
-          <Link className="text-link" to="/analytics">See analytics <ArrowRight size={14} /></Link>
+
+        <article className="card home-upcoming-card">
+          <div className="card-heading"><div><p className="eyebrow">Coming up</p><h2>Upcoming payments</h2></div><Link className="text-link" to="/recurring">Manage <ArrowRight size={14} /></Link></div>
+          {upcomingPayments.length ? <ul className="home-upcoming-list">{upcomingPayments.map((item) => (
+            <li key={item.id}><span className="upcoming-icon"><Repeat size={16} /></span><span className="home-upcoming-info"><strong>{item.note || item.category}</strong><small>{item.groupName ? `${item.groupName} · Group` : 'Personal'} · {formatDate(item.nextDue, { short: true })}</small></span><strong className="home-upcoming-amount">{formatMoney(item.amount)}</strong></li>
+          ))}</ul> : <EmptyState icon={CalendarDays} title="No payments coming up">Add a recurring payment to see what’s next.</EmptyState>}
         </article>
       </section>
 
-      <section className="card recent-card">
-        <div className="card-heading">
-          <div><p className="eyebrow">The latest</p><h2>Recent expenses</h2></div>
-          <Link className="text-link" to="/history">See all <ArrowRight size={15} /></Link>
-        </div>
-        <ExpenseList expenses={recentExpenses} onEdit={setExpenseDialog} onDelete={onDeleteExpense} emptyTitle="Your story starts here" />
-      </section>
-
-      <section className="note-strip">
-        <span className="soft-icon"><ShieldCheck size={19} /></span>
-        <p><strong>Just for your eyes.</strong> All your financial data stays safely on this device.</p>
-      </section>
-      <div className="mobile-quick-add"><button type="button" className="button button-primary" onClick={onAddExpense}><Plus size={19} /> Add expense</button></div>
       <span className="visually-hidden">A total of {thisMonth.length} expenses this month.</span>
     </>
   )
@@ -501,12 +559,32 @@ function settleUpSuggestions(group) {
   return suggestions
 }
 
-function GroupCard({ group, saveData, onAddExpense }) {
+function findUserMember(group, name) {
+  const normalizedName = name?.trim().toLocaleLowerCase()
+  if (!normalizedName) return null
+  return group.members.find((member) => member.name.trim().toLocaleLowerCase() === normalizedName) ?? null
+}
+
+function getUserGroupBalance(group, name) {
+  const member = findUserMember(group, name)
+  if (!member) return null
+  return calculateGroupBalances(group).get(member.id) ?? 0
+}
+
+function getExpenseShare(expense, memberId) {
+  if (!memberId || !expense.participantIds?.includes(memberId)) return 0
+  return expense.splitType === 'custom'
+    ? expense.participantShares?.[memberId] ?? 0
+    : expense.amount / expense.participantIds.length
+}
+
+function GroupCard({ group, saveData, detailPage = false, userName = '', userId }) {
   const [memberName, setMemberName] = useState('')
   const [showExpenseForm, setShowExpenseForm] = useState(false)
   const [editingExpense, setEditingExpense] = useState(null)
   const [expenseTitle, setExpenseTitle] = useState('')
   const [expenseAmount, setExpenseAmount] = useState('')
+  const [expenseCategory, setExpenseCategory] = useState(CATEGORIES[0])
   const [expenseDate, setExpenseDate] = useState(todayISO)
   const [splitType, setSplitType] = useState('equal')
   const [participantShares, setParticipantShares] = useState({})
@@ -556,18 +634,33 @@ function GroupCard({ group, saveData, onAddExpense }) {
       id: editingExpense?.id ?? crypto.randomUUID(),
       title: expenseTitle.trim(),
       amount,
+      category: expenseCategory,
       date: expenseDate,
       paidById,
       participantIds: participants,
       splitType,
       ...(splitType === 'custom' ? { participantShares: shares } : {}),
+      ...(editingExpense
+        ? (editingExpense.createdByUserId ? { createdByUserId: editingExpense.createdByUserId } : {})
+        : { createdByUserId: userId }),
+      ...(editingExpense?.recurringId ? { recurringId: editingExpense.recurringId } : {}),
       ...(receipt ? { receipt } : {}),
     }
-    const saved = await updateGroup((item) => ({
-      ...item,
-      expenses: editingExpense
-        ? item.expenses.map((entry) => entry.id === editingExpense.id ? expense : entry)
-        : [...item.expenses, expense],
+    const saved = await saveData((current) => ({
+      ...current,
+      groups: current.groups.map((item) => item.id === group.id
+        ? {
+          ...item,
+          expenses: editingExpense
+            ? item.expenses.map((entry) => entry.id === editingExpense.id ? expense : entry)
+            : [...item.expenses, expense],
+        }
+        : item),
+      recurringExpenses: editingExpense?.recurringId && editingExpense.date !== expense.date
+        ? current.recurringExpenses.map((item) => item.id === editingExpense.recurringId
+          ? { ...item, skippedDates: [...new Set([...(item.skippedDates ?? []), editingExpense.date])] }
+          : item)
+        : current.recurringExpenses,
     }))
     if (!saved) {
       setFormError('Could not save this shared expense to this device.')
@@ -575,6 +668,7 @@ function GroupCard({ group, saveData, onAddExpense }) {
     }
     setExpenseTitle('')
     setExpenseAmount('')
+    setExpenseCategory(CATEGORIES[0])
     setExpenseDate(todayISO())
     setSplitType('equal')
     setParticipantShares({})
@@ -589,6 +683,7 @@ function GroupCard({ group, saveData, onAddExpense }) {
     setEditingExpense(expense)
     setExpenseTitle(expense.title)
     setExpenseAmount(String(expense.amount))
+    setExpenseCategory(expense.category ?? CATEGORIES[0])
     setExpenseDate(expense.date)
     setPaidById(expense.paidById)
     setParticipantIds([...expense.participantIds])
@@ -604,7 +699,17 @@ function GroupCard({ group, saveData, onAddExpense }) {
 
   const deleteSharedExpense = async (expense) => {
     if (!window.confirm(`Delete “${expense.title}” for ${formatMoney(expense.amount)}?`)) return
-    const saved = await updateGroup((item) => ({ ...item, expenses: item.expenses.filter((entry) => entry.id !== expense.id) }))
+    const saved = await saveData((current) => ({
+      ...current,
+      groups: current.groups.map((item) => item.id === group.id
+        ? { ...item, expenses: item.expenses.filter((entry) => entry.id !== expense.id) }
+        : item),
+      recurringExpenses: expense.recurringId
+        ? current.recurringExpenses.map((item) => item.id === expense.recurringId
+          ? { ...item, skippedDates: [...new Set([...(item.skippedDates ?? []), expense.date])] }
+          : item)
+        : current.recurringExpenses,
+    }))
     setActionError(saved ? '' : 'Could not delete this shared expense from this device.')
   }
 
@@ -614,23 +719,16 @@ function GroupCard({ group, saveData, onAddExpense }) {
   }
 
   return (
-    <article className="card group-card">
+    <article className={`card group-card ${detailPage ? 'group-detail-card' : ''}`}>
       <div className="group-card-heading">
         <span className="group-avatar"><Users size={19} /></span>
         <div><h2>{group.name}</h2><p>{group.members.length} {group.members.length === 1 ? 'member' : 'members'} <span aria-hidden="true">·</span> {group.expenses.length} shared {group.expenses.length === 1 ? 'expense' : 'expenses'}</p></div>
       </div>
-      <div className="group-members">
+      {detailPage && <div className="group-detail-members-heading" id="group-members"><p className="eyebrow">The people in it</p><h2>Balances &amp; members</h2></div>}
+      <div className="group-members" id={detailPage ? 'group-balances' : undefined}>
         {group.members.map((member) => {
           const balance = balances.get(member.id) ?? 0
-          return (
-            <div className="group-member-row" key={member.id}>
-              <span className="member-initial">{member.name.trim().charAt(0).toUpperCase()}</span>
-              <span className="member-name">{member.name}</span>
-              <span className={`member-balance ${balance > 0.005 ? 'balance-credit' : balance < -0.005 ? 'balance-debt' : ''}`}>
-                {balance > 0.005 ? `gets ${formatMoney(balance)}` : balance < -0.005 ? `owes ${formatMoney(Math.abs(balance))}` : 'all settled'}
-              </span>
-            </div>
-          )
+          return <MemberBalance key={member.id} member={member} balance={balance} />
         })}
         {!group.members.length && <p className="supporting-copy">Add your first person to start sharing.</p>}
       </div>
@@ -641,8 +739,8 @@ function GroupCard({ group, saveData, onAddExpense }) {
         <button className="button button-secondary button-small" type="submit"><Plus size={15} /> Add member</button>
       </form>
 
-      {suggestions.length > 0 && (
-        <div className="settle-suggestions">
+      <div className="settle-suggestions" id={detailPage ? 'group-settle-up' : undefined}>
+        {suggestions.length > 0 ? <>
           <p className="mini-heading"><HandCoins size={15} /> Simple settle up</p>
           {suggestions.map((suggestion, index) => (
             <p className="settle-row" key={`${suggestion.from}-${suggestion.to}-${index}`}>
@@ -652,19 +750,10 @@ function GroupCard({ group, saveData, onAddExpense }) {
               <span>{formatMoney(suggestion.amount)}</span>
             </p>
           ))}
-        </div>
-      )}
+        </> : <p className="supporting-copy">Everyone is settled up right now.</p>}
+      </div>
 
       <div className="group-expense-actions">
-        <button type="button" className="text-link" onClick={() => {
-          if (showExpenseForm) {
-            setShowExpenseForm(false)
-            return
-          }
-          onAddExpense()
-        }} disabled={group.members.length === 0}>
-          <Plus size={15} /> {showExpenseForm ? 'Close' : 'Add shared expense'}
-        </button>
         {group.expenses.length > 0 && <span>Total shared {formatMoney(group.expenses.reduce((sum, expense) => sum + expense.amount, 0))}</span>}
       </div>
       {actionError && <p className="field-error" role="alert">{actionError}</p>}
@@ -675,6 +764,7 @@ function GroupCard({ group, saveData, onAddExpense }) {
             <label className="field"><span>What was it for?</span><input type="text" placeholder="e.g. Dinner out" value={expenseTitle} onChange={(event) => setExpenseTitle(event.target.value)} maxLength={80} required /></label>
             <label className="field"><span>Amount (₹)</span><input type="number" inputMode="decimal" min="0.01" step="0.01" placeholder="0.00" value={expenseAmount} onChange={(event) => setExpenseAmount(event.target.value)} required /></label>
           </div>
+            <CategorySelect value={expenseCategory} onChange={setExpenseCategory} id={`group-category-${group.id}`} />
           <label className="field"><span>When was it?</span><input type="date" value={expenseDate} onChange={(event) => setExpenseDate(event.target.value)} required /></label>
           <label className="field"><span>Who paid?</span><select value={paidById} onChange={(event) => setPaidById(event.target.value)} required>{group.members.map((member) => <option value={member.id} key={member.id}>{member.name}</option>)}</select></label>
           <fieldset className="participants-field">
@@ -698,53 +788,241 @@ function GroupCard({ group, saveData, onAddExpense }) {
       )}
 
       {group.expenses.length > 0 && (
-        <details className="shared-expense-history">
-          <summary>See shared expenses</summary>
-          <ul>{[...group.expenses].sort((a, b) => b.date.localeCompare(a.date)).map((expense) => <li key={expense.id}><span><strong>{expense.title}</strong><small>{formatDate(expense.date, { short: true })} · paid by {group.members.find((member) => member.id === expense.paidById)?.name} · {expense.splitType === 'custom' ? 'custom split' : 'equal split'}</small><div className="shared-participant-shares">{expense.participantIds.map((id) => { const member = group.members.find((item) => item.id === id); const share = expense.splitType === 'custom' ? expense.participantShares?.[id] ?? 0 : expense.amount / expense.participantIds.length; return <span key={id}>{member?.name}: {formatMoney(share)}</span> })}</div><ReceiptThumbnail receipt={expense.receipt} /></span><strong>{formatMoney(expense.amount)}</strong><div className="expense-actions"><button className="icon-button small" type="button" onClick={() => beginEditingExpense(expense)} aria-label={`Edit ${expense.title}`}><span aria-hidden="true">✎</span></button><button className="icon-button small delete-button" type="button" onClick={() => deleteSharedExpense(expense)} aria-label={`Delete ${expense.title}`}><X size={15} /></button></div></li>)}</ul>
+        <details className="shared-expense-history" id={detailPage ? 'group-balances' : undefined} open={detailPage}>
+          <summary>Group expense history</summary>
+          <ul>{[...group.expenses].sort((a, b) => b.date.localeCompare(a.date)).map((expense) => {
+            const payer = group.members.find((member) => member.id === expense.paidById)
+            const user = findUserMember(group, userName)
+            const share = getExpenseShare(expense, user?.id)
+            const userNet = user?.id === expense.paidById ? expense.amount - share : -share
+            const result = user && Math.abs(userNet) > 0.005
+              ? `${userNet > 0 ? 'You get back' : 'You owe'} ${formatMoney(Math.abs(userNet))}`
+              : null
+            return <li key={expense.id}><TransactionItem date={expense.date} category={expense.category ?? 'other'} title={expense.title} subtitle={`Paid by ${payer?.name ?? 'a member'} · ${expense.splitType === 'custom' ? 'custom split' : 'equal split'}`} amount={expense.amount} result={result} receipt={expense.receipt} actions={<><button className="icon-button small" type="button" onClick={() => beginEditingExpense(expense)} aria-label={`Edit ${expense.title}`}><span aria-hidden="true">✎</span></button><button className="icon-button small delete-button" type="button" onClick={() => deleteSharedExpense(expense)} aria-label={`Delete ${expense.title}`}><X size={15} /></button></>} /></li>
+          })}</ul>
         </details>
       )}
     </article>
   )
 }
 
-export function GroupsPage({ data, saveData, onAddExpense }) {
+export function GroupsPage({ data, saveData, userId }) {
   const [name, setName] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const userName = data.settings.name
+  const filteredGroups = data.groups.filter((group) =>
+    `${group.name} ${group.members.map((member) => member.name).join(' ')}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
+  )
+  const knownBalances = data.groups.map((group) => getUserGroupBalance(group, userName)).filter((balance) => balance != null)
+  const totalBalance = knownBalances.length ? knownBalances.reduce((sum, balance) => sum + balance, 0) : null
   const handleCreateGroup = (event) => {
     event.preventDefault()
     const groupName = name.trim()
     if (!groupName) return
-    saveData((current) => ({ ...current, groups: [...current.groups, { id: crypto.randomUUID(), name: groupName, members: [], expenses: [] }] }))
+    saveData((current) => ({ ...current, groups: [...current.groups, { id: crypto.randomUUID(), name: groupName, ownerUserId: userId, members: [], expenses: [] }] }))
     setName('')
   }
 
   return (
     <>
-      <PageHeading eyebrow="Better together" title="Shared groups" description="Split the little things, and keep it easy." action={<span className="soft-icon"><Users size={18} /></span>} />
-      <form className="card create-group-form" onSubmit={handleCreateGroup}>
-        <div><p className="eyebrow">Start a little group</p><h2>Who are you sharing with?</h2><p className="supporting-copy">Trips, roommates, family — create a group and keep shared spending fair.</p></div>
+      <header className="groups-page-header">
+        <div><p className="eyebrow">Better together</p><h1>Groups</h1></div>
+        <div className="groups-page-actions">
+          <button className="icon-button groups-search-button" type="button" aria-label={searchOpen ? 'Close group search' : 'Search groups'} onClick={() => { setSearchOpen((open) => !open); setQuery('') }}><Search size={19} /></button>
+          <button className={`button ${createOpen ? 'button-secondary' : 'button-primary'}`} type="button" onClick={() => setCreateOpen((open) => !open)}>{createOpen ? 'Cancel' : <><Plus size={16} /> Create group</>}</button>
+        </div>
+      </header>
+      {searchOpen && <label className="groups-search-field"><Search size={18} /><span className="visually-hidden">Search groups</span><input autoFocus type="search" placeholder="Search groups or members" value={query} onChange={(event) => setQuery(event.target.value)} /></label>}
+      <BalanceSummary balance={totalBalance} label="Overall group balance" hint={totalBalance == null ? 'Add your name in Settings to match group balances.' : `${knownBalances.length} ${knownBalances.length === 1 ? 'group' : 'groups'} included`} />
+      <div className="groups-section-heading"><h2>Your groups</h2><span>{filteredGroups.length}</span></div>
+      {filteredGroups.length ? <section className="group-list" aria-label="Your shared groups">
+        {filteredGroups.map((group) => (
+          <GroupListItem
+            key={group.id}
+            group={group}
+            balance={getUserGroupBalance(group, userName)}
+            memberBalances={[...calculateGroupBalances(group)].map(([id, balance]) => ({ member: group.members.find((member) => member.id === id), balance })).filter(({ member }) => member)}
+          />
+        ))}
+      </section> : <section className="card"><EmptyState icon={Users} title={data.groups.length ? 'No groups found' : 'Make sharing feel simple'}>{data.groups.length ? 'Try another group or member name.' : 'Create your first group to add people, log shared expenses, and see an easy settle-up plan.'}</EmptyState></section>}
+      {createOpen && <form className="card create-group-form" id="create-group-form" onSubmit={(event) => { handleCreateGroup(event); setCreateOpen(false) }}>
+        <div><p className="eyebrow">Start a little group</p><h2>Create a group</h2><p className="supporting-copy">Trips, roommates, family — create a group and keep shared spending fair.</p></div>
         <div className="create-group-controls">
           <label className="visually-hidden" htmlFor="new-group-name">Group name</label>
-          <input id="new-group-name" type="text" placeholder="e.g. Goa getaway" value={name} onChange={(event) => setName(event.target.value)} maxLength={60} required />
-          <button className="button button-primary" type="submit"><Plus size={17} /> Create group</button>
+          <input autoFocus id="new-group-name" type="text" placeholder="e.g. Goa getaway" value={name} onChange={(event) => setName(event.target.value)} maxLength={60} required />
+          <button className="button button-primary" type="submit"><Plus size={17} /> Save group</button>
         </div>
-      </form>
-      {data.groups.length ? (
-        <section className="groups-grid" aria-label="Your shared groups">
-          {data.groups.map((group) => <GroupCard key={group.id} group={group} saveData={saveData} onAddExpense={onAddExpense} />)}
-        </section>
-      ) : (
-        <section className="card"><EmptyState icon={Users} title="Make sharing feel simple">Create your first group above to add people, log a shared expense, and see an easy settle-up plan.</EmptyState></section>
-      )}
+      </form>}
     </>
   )
 }
 
-export function SettingsPage({ data, saveData, onExport, onImport }) {
+export function GroupDetailPage({ data, saveData, userId }) {
+  const { groupId } = useParams()
+  const group = data.groups.find((item) => item.id === groupId)
+  const userName = data.settings.name
+  const balance = group ? getUserGroupBalance(group, userName) : null
+  const chartMonths = useMemo(() => {
+    const months = [...new Set((group?.expenses ?? []).map((expense) => expense.date.slice(0, 7)))].sort()
+    const month = currentMonth()
+    if (!months.includes(month)) months.push(month)
+    return months.slice(-6)
+  }, [group])
+
+  if (!group) {
+    return <section className="card"><EmptyState icon={Users} title="This group isn’t available"><Link className="text-link" to="/groups">Back to your groups <ArrowRight size={14} /></Link></EmptyState></section>
+  }
+
+  const monthTotals = chartMonths.map((month) => ({
+    month,
+    total: group.expenses.filter((expense) => expense.date.slice(0, 7) === month).reduce((sum, expense) => sum + expense.amount, 0),
+  }))
+  const maxTotal = Math.max(1, ...monthTotals.map(({ total }) => total))
+  const scrollTo = (id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const editGroupSettings = async () => {
+    const nextName = window.prompt('Group name', group.name)
+    if (nextName == null || !nextName.trim() || nextName.trim() === group.name) return
+    await saveData((current) => ({ ...current, groups: current.groups.map((item) => item.id === group.id ? { ...item, name: nextName.trim() } : item) }))
+  }
+
+  return (
+    <div className="group-detail-page">
+      <header className="group-detail-header">
+        <div className="group-detail-topline">
+          <Link className="group-back-button" to="/groups" aria-label="Back to groups"><ChevronLeft size={21} /></Link>
+          <span className="group-detail-avatar"><Users size={23} /></span>
+          <button className="icon-button" type="button" aria-label="Group settings" onClick={editGroupSettings}><Settings2 size={19} /></button>
+        </div>
+        <p className="eyebrow">{group.members.length} {group.members.length === 1 ? 'member' : 'members'}</p>
+        <h1>{group.name}</h1>
+        {group.description && <p className="page-description">{group.description}</p>}
+        <BalanceSummary balance={balance} label="Your balance in this group" hint={balance == null ? 'Add your name in Settings to identify your member profile.' : undefined} />
+      </header>
+
+      <nav className="group-detail-actions" aria-label="Group details">
+        <button type="button" onClick={() => scrollTo('group-settle-up')}><HandCoins size={17} /> Settle up</button>
+        <button type="button" onClick={() => scrollTo('group-charts')}><BarChart3 size={17} /> Charts</button>
+        <button type="button" onClick={() => scrollTo('group-balances')}><CircleDollarSign size={17} /> Balances</button>
+        <button type="button" onClick={() => scrollTo('group-members')}><Users size={17} /> Members</button>
+      </nav>
+
+      <section className="card group-chart-card" id="group-charts">
+        <div className="card-heading"><div><p className="eyebrow">Shared spending</p><h2>Group activity</h2></div><span className="soft-icon"><BarChart3 size={18} /></span></div>
+        {monthTotals.some(({ total }) => total > 0) ? <div className="group-chart" aria-label="Group spending by month">
+          {monthTotals.map(({ month, total }) => <div className="group-chart-column" key={month}><strong>{total ? formatMoney(total) : '—'}</strong><span className="group-chart-track"><i style={{ height: `${Math.max(5, total / maxTotal * 100)}%` }} /></span><small>{formatMonth(month).split(' ')[0].slice(0, 3)}</small></div>)}
+        </div> : <p className="supporting-copy">Shared spending will appear here as the group adds expenses.</p>}
+      </section>
+
+      <GroupCard key={group.id} group={group} saveData={saveData} detailPage userName={userName} userId={userId} />
+    </div>
+  )
+}
+
+export function ActivityPage({ data }) {
+  const userName = data.settings.name
+  const entries = [
+    ...data.expenses.map((expense) => ({
+      id: `personal-${expense.id}`,
+      date: expense.date,
+      category: expense.category,
+      title: `You added ${expense.note?.trim() || expense.category}`,
+      detail: `Personal expense · ${formatDate(expense.date, { short: true })}`,
+      amount: expense.amount,
+      tone: 'neutral',
+      createdAt: expense.createdAt ?? '',
+    })),
+    ...data.groups.flatMap((group) => group.expenses.flatMap((expense) => {
+      const payer = group.members.find((member) => member.id === expense.paidById)
+      const user = findUserMember(group, userName)
+      const share = getExpenseShare(expense, user?.id)
+      const delta = user?.id === expense.paidById ? expense.amount - share : -share
+      const transaction = {
+        id: `group-${expense.id}`,
+        date: expense.date,
+        category: expense.category ?? 'other',
+        title: `${expense.title} in ${group.name}`,
+        detail: `Paid by ${payer?.name ?? 'a member'} · ${formatDate(expense.date, { short: true })}`,
+        amount: expense.amount,
+        tone: 'neutral',
+        createdAt: expense.createdAt ?? '',
+      }
+      if (!user || Math.abs(delta) <= 0.005) return [transaction]
+      return [
+        transaction,
+        {
+          id: `balance-${expense.id}`,
+          date: expense.date,
+          category: expense.category ?? 'other',
+          title: delta > 0 ? `You get back ${formatMoney(delta)}` : `You owe ${formatMoney(-delta)}`,
+          detail: `${expense.title} · ${group.name}`,
+          amount: Math.abs(delta),
+          tone: delta > 0 ? 'credit' : 'debt',
+          createdAt: expense.createdAt ?? '',
+        },
+      ]
+    })),
+  ].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))
+
+  return (
+    <>
+      <PageHeading eyebrow="Together and personal" title="Activity" description="A chronological view of your personal and shared spending." />
+      <section className="activity-feed" aria-label="Recent financial activity">
+        {entries.length ? entries.map((entry) => <ActivityItem key={entry.id} {...entry} />) : <article className="card"><EmptyState icon={Activity} title="No activity just yet">New personal and group expenses will show up here.</EmptyState></article>}
+      </section>
+    </>
+  )
+}
+
+export function PersonalPage({ data, setExpenseDialog, onDeleteExpense }) {
+  const month = currentMonth()
+  const expenses = monthExpenses(data.expenses, month)
+  const spending = expenses.reduce((sum, expense) => sum + expense.amount, 0)
+  const income = data.income.filter((entry) => entry.date.slice(0, 7) === month).reduce((sum, entry) => sum + entry.amount, 0)
+  const personalRules = data.recurringExpenses.filter((item) => item.scope !== 'group')
+  const personalLinks = [
+    { to: '/history', icon: History, title: 'Expenses', detail: `${formatMoney(spending)} spent this month` },
+    { to: '/budget', icon: Wallet, title: 'Budgets', detail: `${formatMoney(data.budgets[month] ?? 0)} monthly plan` },
+    { to: '/analytics', icon: TrendingUp, title: 'Income & goals', detail: `${formatMoney(income)} income · ${data.savingsGoals.length} savings goals` },
+    { to: '/recurring', icon: Repeat, title: 'Recurring payments', detail: `${personalRules.length} personal ${personalRules.length === 1 ? 'payment' : 'payments'}` },
+    { to: '/calendar', icon: CalendarDays, title: 'Calendar', detail: 'Browse income and spending by date' },
+    { to: '/analytics', icon: BarChart3, title: 'Analytics', detail: 'See your personal cash flow' },
+  ]
+  const recentExpenses = [...expenses].sort(expenseDateOrder).slice(0, 5)
+
+  return (
+    <>
+      <PageHeading eyebrow="Your private money space" title="Personal" description="A private view of the money and plans that are just yours." />
+      <section className="personal-summary-strip">
+        <div><span>Spent this month</span><strong>{formatMoney(spending)}</strong></div>
+        <div><span>Income this month</span><strong>{formatMoney(income)}</strong></div>
+        <div><span>Monthly balance</span><strong className={income - spending < 0 ? 'cashflow-negative' : ''}>{formatMoney(income - spending)}</strong></div>
+      </section>
+      <section className="personal-tools-list" aria-label="Personal finance features">
+        {personalLinks.map(({ to, icon: Icon, title, detail }) => <Link className="personal-tool-link" to={to} key={title}><span className="personal-tool-icon"><Icon size={18} /></span><span><strong>{title}</strong><small>{detail}</small></span><ArrowRight size={16} /></Link>)}
+      </section>
+      <section className="card personal-recent-card">
+        <div className="card-heading"><div><p className="eyebrow">{formatMonth(month)}</p><h2>Personal expenses</h2></div><Link className="text-link" to="/history">All expenses <ArrowRight size={14} /></Link></div>
+        {recentExpenses.length ? <div className="transaction-list">{recentExpenses.map((expense) => <TransactionItem key={expense.id} date={expense.date} category={expense.category} title={expense.note?.trim() || expense.category} subtitle="Personal expense" amount={expense.amount} receipt={expense.receipt} actions={<><button className="icon-button small" type="button" onClick={() => setExpenseDialog(expense)} aria-label={`Edit ${expense.note || expense.category} expense`}><span aria-hidden="true">✎</span></button><button className="icon-button small delete-button" type="button" onClick={() => onDeleteExpense(expense)} aria-label={`Delete ${expense.note || expense.category} expense`}><X size={15} /></button></>} />)}</div> : <EmptyState icon={Wallet} title="Nothing personal this month">Your personal expenses will appear here. Group expenses stay separate.</EmptyState>}
+      </section>
+    </>
+  )
+}
+
+export function SettingsPage({ data, saveData, onExport, onExportCsv, onImport }) {
   const [nameDraft, setNameDraft] = useState(null)
   const [saved, setSaved] = useState(false)
   const importInputRef = useRef(null)
+  const location = useLocation()
   const displayName = nameDraft?.initialName === data.settings.name ? nameDraft.value : data.settings.name
   const totalExpenses = data.expenses.length
+
+  useEffect(() => {
+    const targetId = location.hash.slice(1)
+    if (!targetId) return
+    window.requestAnimationFrame(() => document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }, [location.hash])
   const saveName = async (event) => {
     event.preventDefault()
     const success = await saveData((current) => ({ ...current, settings: { ...current.settings, name: displayName.trim() } }))
@@ -765,6 +1043,11 @@ export function SettingsPage({ data, saveData, onExport, onImport }) {
         </div>
       </section>
       <section className="settings-grid">
+        <article className="card settings-card account-settings-card">
+          <div className="card-heading"><div><p className="eyebrow">Your sign-in</p><h2>Account</h2></div><span className="soft-icon"><ShieldCheck size={18} /></span></div>
+          <p className="supporting-copy">Manage the account you use to access Spendly and shared groups.</p>
+          <Link className="button button-secondary" to="/account">Account details <ArrowRight size={16} /></Link>
+        </article>
         <article className="card settings-card">
           <div className="card-heading"><div><p className="eyebrow">Make yourself at home</p><h2>Your details</h2></div><span className="soft-icon"><Sparkles size={18} /></span></div>
           <form className="settings-name-form" onSubmit={saveName}>
@@ -775,10 +1058,11 @@ export function SettingsPage({ data, saveData, onExport, onImport }) {
           <div className="settings-info-row"><span>Expense categories</span><strong>{CATEGORIES.length} included</strong></div>
         </article>
 
-        <article className="card settings-card backup-card">
+        <article className="card settings-card backup-card" id="backup-tools">
           <div className="card-heading"><div><p className="eyebrow">Yours to keep</p><h2>Import &amp; backup</h2></div><span className="soft-icon"><Download size={18} /></span></div>
-          <p className="supporting-copy">Save or restore a JSON copy of your expenses and receipts, recurring rules, statement-import history, income, budgets, savings goals, groups, and settings. Nothing is sent anywhere.</p>
+          <p className="supporting-copy">Export your transactions as CSV, or save and restore a JSON copy of your expenses and receipts, recurring rules, statement-import history, income, budgets, savings goals, groups, and settings. Nothing is sent anywhere.</p>
           <div className="backup-actions">
+            <button className="button button-secondary" type="button" onClick={onExportCsv}><Download size={17} /> Export CSV</button>
             <button className="button button-primary" type="button" onClick={onExport}><Download size={17} /> Export backup</button>
             <button className="button button-secondary" type="button" onClick={() => importInputRef.current?.click()}>Import backup</button>
             <input ref={importInputRef} className="visually-hidden" type="file" accept=".json,application/json" onChange={onImport} aria-label="Choose a JSON backup file" />
@@ -791,16 +1075,51 @@ export function SettingsPage({ data, saveData, onExport, onImport }) {
           <div className="card-heading"><div><p className="eyebrow">No funny business</p><h2>Your privacy</h2></div><span className="privacy-icon"><ShieldCheck size={19} /></span></div>
           <ul className="privacy-list">
             <li><Check size={16} /><span>Your financial data and compressed receipt photos live in this browser’s local IndexedDB storage.</span></li>
-            <li><Check size={16} /><span>Statement files are read locally for your review; Rupee Wise never connects to your bank or uploads transaction data.</span></li>
+            <li><Check size={16} /><span>Statement files are read locally for your review; Spendly never connects to your bank or uploads transaction data.</span></li>
             <li><Check size={16} /><span>JSON backups include your receipts and can be large. Export a backup any time, or clear your browser data to remove it.</span></li>
           </ul>
         </article>
 
         <article className="card settings-card about-card">
           <div className="card-heading"><div><p className="eyebrow">A little about us</p><h2>Money, made mindful.</h2></div><span className="soft-icon"><CircleHelp size={18} /></span></div>
-          <p className="supporting-copy">Rupee Wise is a quiet little space to understand your spending, make a monthly plan, and share group expenses without the fuss.</p>
+          <p className="supporting-copy">Spendly is a quiet little space to understand your spending, make a monthly plan, and share group expenses without the fuss.</p>
           <div className="about-mark"><span className="brand-mark small">₹</span> <span>Made for your everyday.</span></div>
         </article>
+      </section>
+    </>
+  )
+}
+
+export function AccountPage({ user, onSignOut }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const name = user.user_metadata?.full_name?.trim()
+  const handleSignOut = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await onSignOut()
+    } catch (signOutError) {
+      setError(signOutError instanceof Error ? signOutError.message : 'Could not log out. Please try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <PageHeading eyebrow="Your Spendly account" title="Account" description="Your sign-in details for Spendly and shared groups." />
+      <section className="card account-card">
+        <div className="account-avatar">{name ? name.charAt(0).toUpperCase() : user.email?.charAt(0).toUpperCase() ?? 'S'}</div>
+        <div className="account-identity">
+          <p className="eyebrow">Signed in as</p>
+          {name && <h2>{name}</h2>}
+          <p>{user.email}</p>
+        </div>
+        {error && <p className="auth-feedback auth-error" role="alert">{error}</p>}
+        <button className="button button-secondary account-signout" type="button" disabled={busy} onClick={handleSignOut}>
+          <LogOut size={17} /> {busy ? 'Logging out…' : 'Log out'}
+        </button>
       </section>
     </>
   )
@@ -888,7 +1207,7 @@ function StatementImporter({ data, saveData }) {
   }
 
   return (
-    <section className="statement-import-card" aria-labelledby="statement-import-title">
+    <section className="statement-import-card" id="bank-statement-import" aria-labelledby="statement-import-title">
     <div className="card-heading"><div><p className="eyebrow">Bring in a statement</p><h3 id="statement-import-title">Import a bank statement</h3><p className="supporting-copy">Choose a CSV, OFX, or QFX file stored on this device. Nothing is uploaded or connected to your bank.</p></div><span className="soft-icon"><Landmark size={18} /></span></div>
       <label className="statement-file-button">
         <input type="file" accept=".csv,.ofx,.qfx,text/csv,application/x-ofx" onChange={readStatement} disabled={busy} />
@@ -1052,7 +1371,9 @@ export function AnalyticsPage({ data, saveData }) {
   )
 }
 
-export function RecurringPage({ data, saveData }) {
+export function RecurringPage({ data, saveData, userId }) {
+  const [scope, setScope] = useState('personal')
+  const [groupId, setGroupId] = useState('')
   const [amount, setAmount] = useState('')
   const [category, setCategory] = useState(CATEGORIES[3])
   const [note, setNote] = useState('')
@@ -1061,6 +1382,28 @@ export function RecurringPage({ data, saveData }) {
   const [customInterval, setCustomInterval] = useState('2')
   const [customUnit, setCustomUnit] = useState('week')
   const [endDate, setEndDate] = useState('')
+  const [paidById, setPaidById] = useState('')
+  const [participantIds, setParticipantIds] = useState([])
+  const [splitType, setSplitType] = useState('equal')
+  const [participantShares, setParticipantShares] = useState({})
+  const [error, setError] = useState('')
+  const selectedGroup = data.groups.find((group) => group.id === groupId)
+
+  const chooseGroup = (nextGroupId) => {
+    const group = data.groups.find((item) => item.id === nextGroupId)
+    setGroupId(nextGroupId)
+    setPaidById(group?.members[0]?.id ?? '')
+    setParticipantIds(group?.members.map((member) => member.id) ?? [])
+    setParticipantShares({})
+    setError('')
+  }
+
+  const toggleParticipant = (memberId) => {
+    setParticipantIds((current) => current.includes(memberId)
+      ? current.filter((id) => id !== memberId)
+      : [...current, memberId])
+    setParticipantShares((current) => ({ ...current, [memberId]: current[memberId] ?? '' }))
+  }
 
   const submit = async (event) => {
     event.preventDefault()
@@ -1068,12 +1411,35 @@ export function RecurringPage({ data, saveData }) {
     const interval = frequency === 'weekly' ? 1
       : frequency === 'monthly' ? 1
         : frequency === 'quarterly' ? 3
+          : frequency === 'semiannual' ? 6
           : frequency === 'yearly' ? 12 : Number(customInterval)
     const intervalUnit = frequency === 'weekly' ? 'week'
       : frequency === 'custom' ? customUnit : 'month'
-    if (!Number.isFinite(numericAmount) || numericAmount <= 0 || !date || (frequency === 'custom' && (!Number.isInteger(interval) || interval < 1 || interval > 365)) || (endDate && endDate < date)) return
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0 || !date || (frequency === 'custom' && (!Number.isInteger(interval) || interval < 1 || interval > 365)) || (endDate && endDate < date)) {
+      setError('Check the amount, schedule, and end date, then try again.')
+      return
+    }
+    if (scope === 'group' && (!selectedGroup || !selectedGroup.members.length ||
+      !selectedGroup.members.some((member) => member.id === paidById) ||
+      !participantIds.length ||
+      participantIds.some((id) => !selectedGroup.members.some((member) => member.id === id)))) {
+      setError('Choose a group, payer, and at least one participant.')
+      return
+    }
+    const shares = scope === 'group' && splitType === 'custom'
+      ? Object.fromEntries(participantIds.map((id) => [id, Number(participantShares[id])]))
+      : undefined
+    if (shares) {
+      const validShares = Object.values(shares).every((share) => Number.isFinite(share) && share >= 0)
+      const totalCents = Object.values(shares).reduce((sum, share) => sum + Math.round(share * 100), 0)
+      if (!validShares || totalCents !== Math.round(numericAmount * 100)) {
+        setError('Custom shares must be valid amounts that add up to the full payment.')
+        return
+      }
+    }
     const recurring = {
       id: crypto.randomUUID(),
+      scope,
       amount: numericAmount,
       category,
       note: note.trim(),
@@ -1085,6 +1451,14 @@ export function RecurringPage({ data, saveData }) {
       interval,
       intervalUnit,
       active: true,
+      ...(scope === 'group' ? {
+        groupId,
+        createdByUserId: userId,
+        paidById,
+        participantIds,
+        splitType,
+        ...(shares ? { participantShares: shares } : {}),
+      } : {}),
     }
     const nextData = applyRecurringExpenses({ ...data, recurringExpenses: [...data.recurringExpenses, recurring] })
     if (await saveData(() => nextData)) {
@@ -1095,6 +1469,13 @@ export function RecurringPage({ data, saveData }) {
       setCustomInterval('2')
       setCustomUnit('week')
       setEndDate('')
+      setScope('personal')
+      setGroupId('')
+      setPaidById('')
+      setParticipantIds([])
+      setSplitType('equal')
+      setParticipantShares({})
+      setError('')
     }
   }
 
@@ -1118,46 +1499,71 @@ export function RecurringPage({ data, saveData }) {
   const frequencyLabel = (item) => item.frequency === 'custom'
     ? `every ${item.interval} ${item.intervalUnit}${item.interval === 1 ? '' : 's'}`
     : item.frequency === 'quarterly' ? 'quarterly'
+      : item.frequency === 'semiannual' ? 'every 6 months'
       : item.frequency === 'yearly' ? 'yearly'
         : item.frequency
 
   return (
     <>
-      <PageHeading eyebrow="The little things, on repeat" title="Recurring expenses" description="Choose a schedule and end date. Rupee Wise adds each due occurrence to your local expense history." />
+      <PageHeading eyebrow="The little things, on repeat" title="Recurring payments" description="Plan personal bills or shared group payments and keep every due date in view." />
       <section className="recurring-layout">
         <article className="card recurring-form-card">
           <div className="card-heading"><div><p className="eyebrow">Your schedule</p><h2>Set up a recurring expense</h2></div><span className="soft-icon"><Repeat size={18} /></span></div>
           <form className="recurring-form" onSubmit={submit}>
+            <fieldset className="recurring-scope-field">
+              <legend>Who is this for?</legend>
+              <div className="recurring-scope-options">
+                <label className={scope === 'personal' ? 'recurring-scope-selected' : ''}><input type="radio" name="recurring-scope" value="personal" checked={scope === 'personal'} onChange={() => { setScope('personal'); setError('') }} /> Personal</label>
+                <label className={scope === 'group' ? 'recurring-scope-selected' : ''}><input type="radio" name="recurring-scope" value="group" checked={scope === 'group'} onChange={() => { setScope('group'); setError('') }} /> Group</label>
+              </div>
+            </fieldset>
+            {scope === 'group' && <label className="field"><span>Choose a group</span><select value={groupId} onChange={(event) => chooseGroup(event.target.value)} required><option value="">Select a group…</option>{data.groups.map((group) => <option value={group.id} key={group.id}>{group.name}</option>)}</select></label>}
+            {scope === 'group' && data.groups.length === 0 && <p className="split-hint">Create a group and add members first. <Link className="text-link" to="/groups">Go to Groups <ArrowRight size={13} /></Link></p>}
+            {scope === 'group' && selectedGroup && <fieldset className="recurring-group-fields">
+              {!selectedGroup.members.length ? <p className="supporting-copy">Add members to this group before setting up a shared payment.</p> : <>
+                <label className="field"><span>Who pays?</span><select value={paidById} onChange={(event) => setPaidById(event.target.value)} required><option value="">Choose a payer…</option>{selectedGroup.members.map((member) => <option value={member.id} key={member.id}>{member.name}</option>)}</select></label>
+                <fieldset className="participants-field"><legend>Who takes part?</legend><div className="participant-options">{selectedGroup.members.map((member) => <label className="participant-option" key={member.id}><input type="checkbox" checked={participantIds.includes(member.id)} onChange={() => toggleParticipant(member.id)} /><span>{member.name}</span></label>)}</div></fieldset>
+                <label className="field"><span>Split type</span><select value={splitType} onChange={(event) => setSplitType(event.target.value)}><option value="equal">Equal split</option><option value="custom">Custom split</option></select></label>
+                {splitType === 'custom' && <div className="custom-share-fields">{selectedGroup.members.filter((member) => participantIds.includes(member.id)).map((member) => <label className="field" key={member.id}><span>{member.name}’s share</span><span className="amount-input-wrap"><span>₹</span><input type="number" min="0" step="0.01" inputMode="decimal" value={participantShares[member.id] ?? ''} onChange={(event) => setParticipantShares((current) => ({ ...current, [member.id]: event.target.value }))} required /></span></label>)}<p className="split-hint">Custom shares must add up to {formatMoney(Number(amount) || 0)}.</p></div>}
+              </>}
+            </fieldset>}
             <label className="field"><span>Amount each time</span><span className="amount-input-wrap"><span>₹</span><input type="number" min="0.01" step="0.01" inputMode="decimal" placeholder="e.g. 1,200" value={amount} onChange={(event) => setAmount(event.target.value)} required /></span></label>
-            <CategorySelect value={category} onChange={setCategory} id="recurring-category" />
-            <label className="field"><span>What is it?</span><input type="text" placeholder="e.g. Internet bill" maxLength={120} value={note} onChange={(event) => setNote(event.target.value)} required /></label>
-            <label className="field"><span>Frequency</span><select value={frequency} onChange={(event) => setFrequency(event.target.value)}><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option><option value="custom">Custom interval</option></select></label>
+            {scope === 'personal' && <CategorySelect value={category} onChange={setCategory} id="recurring-category" />}
+            <label className="field"><span>{scope === 'group' ? 'What is the payment for?' : 'What is it?'}</span><input type="text" placeholder={scope === 'group' ? 'e.g. Shared internet bill' : 'e.g. Internet bill'} maxLength={120} value={note} onChange={(event) => setNote(event.target.value)} required /></label>
+            <label className="field"><span>Frequency</span><select value={frequency} onChange={(event) => setFrequency(event.target.value)}><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Every 3 months</option><option value="semiannual">Every 6 months</option><option value="yearly">Yearly</option><option value="custom">Custom</option></select></label>
             {frequency === 'custom' && <div className="form-grid"><label className="field"><span>Repeat every</span><input type="number" min="1" max="365" step="1" value={customInterval} onChange={(event) => setCustomInterval(event.target.value)} required /></label><label className="field"><span>Interval unit</span><select value={customUnit} onChange={(event) => setCustomUnit(event.target.value)}><option value="day">Days</option><option value="week">Weeks</option><option value="month">Months</option></select></label></div>}
-            <label className="field"><span>First occurrence</span><input type="date" min={todayISO()} value={date} onChange={(event) => setDate(event.target.value)} required /></label>
+            <label className="field"><span>Start date</span><input type="date" min={todayISO()} value={date} onChange={(event) => setDate(event.target.value)} required /></label>
+            <p className="split-hint">Next due date: {formatDate(date, { short: true })}</p>
             <label className="field"><span>End date <span className="optional">(optional)</span></span><input type="date" min={date} value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
-            <p className="split-hint">A monthly occurrence stays on the same calendar day; short months use their last day.</p>
-            <button className="button button-primary" type="submit"><Plus size={16} /> Create recurring expense</button>
+            {error && <p className="field-error" role="alert">{error}</p>}
+            <button className="button button-primary" type="submit" disabled={scope === 'group' && (!selectedGroup || !selectedGroup.members.length)}><Plus size={16} /> Create recurring payment</button>
           </form>
         </article>
         <article className="card recurring-list-card">
-          <div className="card-heading"><div><p className="eyebrow">Your standing plans</p><h2>Monthly rules</h2></div><span className="soft-icon"><CalendarDays size={18} /></span></div>
-          {data.recurringExpenses.length ? <ul className="recurring-list">{data.recurringExpenses.map((item) => (
-            <li className={`recurring-item ${!item.active ? 'recurring-paused' : ''}`} key={item.id}>
-              <CategoryIcon category={item.category} />
-              <span className="recurring-description"><strong>{item.note || item.category}</strong><small>{item.category} · {frequencyLabel(item)}{item.active ? (() => { const next = getNextRecurringDate(item, data.expenses); return next ? ` · next ${formatDate(next, { short: true })}` : ' · complete' })() : ' · paused'}{item.endDate ? ` · ends ${formatDate(item.endDate, { short: true })}` : ''}</small></span>
-              <strong className="expense-amount">{formatMoney(item.amount)}</strong>
-              <button className={`button button-small ${item.active ? 'button-secondary' : 'button-primary'}`} type="button" onClick={() => toggle(item.id)}>{item.active ? 'Pause' : 'Resume'}</button>
-              <button className="icon-button small delete-button" type="button" onClick={() => remove(item)} aria-label={`Remove ${item.note || item.category} recurring expense`}><X size={15} /></button>
-            </li>
-          ))}</ul> : <EmptyState icon={Repeat} title="Nothing on repeat yet">Rent, subscriptions, and those regular bills can all be added here.</EmptyState>}
-          <p className="recurring-note"><ShieldCheck size={15} /> Occurrences are saved in your local expense history and never duplicated.</p>
+          <div className="card-heading"><div><p className="eyebrow">Your standing plans</p><h2>Recurring payments</h2></div><span className="soft-icon"><CalendarDays size={18} /></span></div>
+          {data.recurringExpenses.length ? <ul className="recurring-list">{data.recurringExpenses.map((item) => {
+            const itemGroup = item.scope === 'group' ? data.groups.find((group) => group.id === item.groupId) : null
+            const nextDue = item.active ? getNextRecurringDate(item, itemGroup ? itemGroup.expenses : data.expenses) : null
+            const payerName = itemGroup?.members.find((member) => member.id === item.paidById)?.name
+            const participantNames = itemGroup?.members.filter((member) => item.participantIds?.includes(member.id)).map((member) => member.name).join(', ')
+            return (
+              <li className={`recurring-item ${!item.active ? 'recurring-paused' : ''}`} key={item.id}>
+                <CategoryIcon category={item.category} />
+                <span className="recurring-description"><strong>{item.note || item.category}</strong><small>{item.scope === 'group' ? `${itemGroup?.name ?? 'Group'} · ${item.splitType === 'custom' ? 'custom split' : 'equal split'}` : `${item.category} · Personal`} · {frequencyLabel(item)}{item.active ? nextDue ? ` · next ${formatDate(nextDue, { short: true })}` : ' · complete' : ' · paused'}{item.endDate ? ` · ends ${formatDate(item.endDate, { short: true })}` : ''}{payerName ? ` · paid by ${payerName}` : ''}{participantNames ? ` · participants: ${participantNames}` : ''}</small></span>
+                <strong className="expense-amount">{formatMoney(item.amount)}</strong>
+                <button className={`button button-small ${item.active ? 'button-secondary' : 'button-primary'}`} type="button" onClick={() => toggle(item.id)}>{item.active ? 'Pause' : 'Resume'}</button>
+                <button className="icon-button small delete-button" type="button" onClick={() => remove(item)} aria-label={`Remove ${item.note || item.category} recurring expense`}><X size={15} /></button>
+              </li>
+            )
+          })}</ul> : <EmptyState icon={Repeat} title="Nothing on repeat yet">Rent, subscriptions, and those regular bills can all be added here.</EmptyState>}
+          <p className="recurring-note"><ShieldCheck size={15} /> Occurrences are added to personal history or the selected group and are never duplicated.</p>
         </article>
       </section>
     </>
   )
 }
 
-export function CalendarPage({ data, onAddExpense }) {
+export function CalendarPage({ data }) {
   const [month, setMonth] = useState(currentMonth)
   const [selectedDate, setSelectedDate] = useState(todayISO)
   const months = availableMonths(data, month)
@@ -1208,7 +1614,6 @@ export function CalendarPage({ data, onAddExpense }) {
           {selectedExpenses.length > 0 && <><p className="mini-heading calendar-section-label"><TrendingDown size={14} /> Expenses</p><ul className="calendar-record-list">{selectedExpenses.map((expense) => <li key={expense.id}><CategoryIcon category={expense.category} size={17} /><span>{expense.note || expense.category}</span><strong>−{formatMoney(expense.amount)}</strong></li>)}</ul></>}
           {selectedIncome.length > 0 && <><p className="mini-heading calendar-section-label calendar-income-label"><TrendingUp size={14} /> Income</p><ul className="calendar-record-list">{selectedIncome.map((item) => <li key={item.id}><span className="income-record-icon"><TrendingUp size={15} /></span><span>{item.source || 'Income'}</span><strong>+{formatMoney(item.amount)}</strong></li>)}</ul></>}
           {selectedExpenses.length === 0 && selectedIncome.length === 0 && <EmptyState icon={CalendarDays} title="A clear day">No expenses or income recorded for this date.</EmptyState>}
-          <button className="button button-secondary calendar-add-expense" type="button" onClick={onAddExpense}><Plus size={15} /> Add an expense</button>
         </article>
       </section>
     </>

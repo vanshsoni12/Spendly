@@ -1,46 +1,55 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowRight,
-  BarChart3,
+  Activity,
   CalendarDays,
   Check,
   ClipboardList,
   LayoutDashboard,
+  Menu,
   Plus,
+  PiggyBank,
   Repeat,
   Settings,
   ShieldCheck,
-  TrendingUp,
   Users,
+  UserRound,
   Wallet,
   X,
 } from 'lucide-react'
 import { BrowserRouter, NavLink, Route, Routes, useLocation } from 'react-router-dom'
-import { CategorySelect, ReceiptField } from './components'
+import { BottomNavigation, CategorySelect, FloatingAddExpense, ReceiptField } from './components'
 import { applyRecurringExpenses, CATEGORIES, emptyAppData, readAppData, validateBackup, writeAppData } from './data'
 import { formatMoney, makeId, todayISO } from './utils'
-import { AnalyticsPage, BudgetPage, CalendarPage, GroupsPage, HistoryPage, HomePage, RecurringPage, SettingsPage } from './pages'
+import { AccountPage, ActivityPage, AnalyticsPage, BudgetPage, CalendarPage, GroupDetailPage, GroupsPage, HistoryPage, HomePage, PersonalPage, RecurringPage, SettingsPage } from './pages'
 import './App.css'
+
+const AuthPage = lazy(() => import('./AuthPage'))
 
 const navigation = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
-  { to: '/history', label: 'History', icon: ClipboardList },
-  { to: '/budget', label: 'Budgets', icon: BarChart3 },
-  { to: '/analytics', label: 'Analytics', icon: TrendingUp },
-  { to: '/calendar', label: 'Calendar', icon: CalendarDays },
-  { to: '/recurring', label: 'Recurring', icon: Repeat },
   { to: '/groups', label: 'Groups', icon: Users },
+  { to: '/activity', label: 'Activity', icon: Activity },
+  { to: '/personal', label: 'Personal', icon: UserRound },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 
-const bottomNavigation = navigation.filter(({ to }) =>
-  ['/', '/history', '/budget', '/groups', '/settings'].includes(to),
-)
+const bottomNavigation = navigation
 
-function AppShell({ data, saveData, storageError, clearStorageError, children }) {
+const advancedNavigation = [
+  { to: '/analytics', label: 'Income & saving goals', icon: PiggyBank, description: 'Set income and track your goals' },
+  { to: '/recurring', label: 'Recurring payments', icon: Repeat, description: 'Manage regular payments' },
+  { to: '/calendar', label: 'Calendar', icon: CalendarDays, description: 'Explore spending by date' },
+  { to: '/settings#backup-tools', label: 'Import & backup', icon: ShieldCheck, description: 'Save or restore your Spendly data' },
+  { to: '/settings#bank-statement-import', label: 'Bank statement import', icon: Wallet, description: 'Import transactions from a statement file' },
+]
+
+function AppShell({ data, saveData, storageError, clearStorageError, session, children }) {
   const [expenseDialog, setExpenseDialog] = useState(undefined)
   const [notice, setNotice] = useState(null)
   const [expenseDialogTrigger, setExpenseDialogTrigger] = useState(null)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const advancedTrigger = useRef(null)
   const location = useLocation()
   const isHome = location.pathname === '/'
   const showExpenseDialog = (dialog) => {
@@ -53,11 +62,39 @@ function AppShell({ data, saveData, storageError, clearStorageError, children })
     setExpenseDialog(undefined)
     window.requestAnimationFrame(() => expenseDialogTrigger?.focus())
   }
+  const openAdvancedTools = () => {
+    advancedTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setAdvancedOpen(true)
+  }
+  const closeAdvancedTools = () => {
+    setAdvancedOpen(false)
+    window.requestAnimationFrame(() => advancedTrigger.current?.focus())
+  }
+  const handleToolsKeyDown = (event) => {
+    if (event.key === 'Escape') {
+      closeAdvancedTools()
+      return
+    }
+    if (event.key !== 'Tab') return
+    const focusable = [...event.currentTarget.querySelectorAll('a[href], button:not(:disabled)')]
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last?.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first?.focus()
+    }
+  }
 
   useEffect(() => {
-    const currentPage = navigation.find((item) => item.to === location.pathname)?.label
-    document.title = `${currentPage ? `${currentPage} · ` : ''}Rupee Wise`
-  }, [location.pathname])
+    const groupId = location.pathname.startsWith('/groups/') ? location.pathname.slice('/groups/'.length) : ''
+    const currentPage = groupId
+      ? data.groups.find((group) => group.id === groupId)?.name ?? 'Group'
+      : navigation.find((item) => item.to === location.pathname)?.label
+    document.title = `${currentPage ? `${currentPage} · ` : ''}Spendly`
+  }, [data.groups, location.pathname])
 
   useEffect(() => {
     if (!notice) return undefined
@@ -80,6 +117,36 @@ function AppShell({ data, saveData, storageError, clearStorageError, children })
     if (success) setNotice({ type: 'success', text: 'Expense deleted. Your monthly totals are up to date.' })
   }
 
+  const exportCsv = () => {
+    try {
+      const rows = [
+        ['Type', 'Date', 'Description', 'Category', 'Amount (INR)', 'Group'],
+        ...data.expenses.map((expense) => ['Expense', expense.date, expense.note || expense.category, expense.category, expense.amount, 'Personal']),
+        ...data.income.map((item) => ['Income', item.date, item.source || 'Income', '', item.amount, 'Personal']),
+        ...data.groups.flatMap((group) => group.expenses.map((expense) => [
+          'Group expense',
+          expense.date,
+          expense.title || expense.note || expense.category || 'Shared expense',
+          expense.category || '',
+          expense.amount,
+          group.name,
+        ])),
+      ]
+      const csv = rows.map((row) => row.map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n')
+      const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `spendly-transactions-${todayISO()}.csv`
+      document.body.append(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch {
+      setNotice({ type: 'error', text: 'Your CSV could not be created. Please try again.' })
+    }
+  }
+
   const exportBackup = () => {
     try {
       const backup = {
@@ -90,7 +157,7 @@ function AppShell({ data, saveData, storageError, clearStorageError, children })
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = `rupee-wise-backup-${todayISO()}.json`
+      link.download = `spendly-backup-${todayISO()}.json`
       document.body.append(link)
       link.click()
       link.remove()
@@ -108,7 +175,7 @@ function AppShell({ data, saveData, storageError, clearStorageError, children })
     try {
       const parsed = JSON.parse(await file.text())
       const restoredData = applyRecurringExpenses(validateBackup(parsed))
-      if (!window.confirm('Import this backup and replace all Rupee Wise data currently saved on this device?')) return
+      if (!window.confirm('Import this backup and replace all Spendly data currently saved on this device?')) return
       const success = await saveData(() => restoredData)
       if (success) setNotice({ type: 'success', text: 'Your backup is restored. Everything is right where it belongs.' })
     } catch (error) {
@@ -120,35 +187,15 @@ function AppShell({ data, saveData, storageError, clearStorageError, children })
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <NavLink className="brand" to="/" aria-label="Rupee Wise home">
-          <span className="brand-mark">₹</span>
-          <span className="brand-name">rupee<span>wise</span><small>money, made mindful</small></span>
-        </NavLink>
-
-        <p className="nav-label">YOUR SPACE</p>
-        <nav className="side-nav" aria-label="Main navigation">
-          {navigation.map(({ to, label, icon: Icon, end }) => (
-            <NavLink className={({ isActive }) => `nav-link ${isActive ? 'nav-link-active' : ''}`} key={to} to={to} end={end}>
-              <Icon size={19} strokeWidth={1.8} aria-hidden="true" /><span>{label}</span>{label === 'Groups' && data.groups.length > 0 && <span className="nav-count">{data.groups.length}</span>}
-            </NavLink>
-          ))}
-        </nav>
-
-        <button className="sidebar-add button button-primary" type="button" onClick={openAddExpense}><Plus size={17} /> Add an expense</button>
-        <div className="sidebar-spacer" />
-        <div className="sidebar-privacy"><span className="privacy-icon"><ShieldCheck size={17} /></span><div><strong>Private by nature</strong><span>Your money stays yours.</span></div></div>
-        <div className="sidebar-footer"><span className="sidebar-footer-dot" /> Stored securely on this device</div>
-      </aside>
-
       <div className="app-main">
         <header className="topbar">
           <span className="topbar-context">{isHome ? 'YOUR PERSONAL MONEY SPACE' : 'YOUR FINANCIAL OVERVIEW'}</span>
           <div className="topbar-right">
             <span className="local-badge"><span /> All data stored locally</span>
-            <NavLink className="topbar-avatar" to="/settings" aria-label="Go to settings">
+            <button className="topbar-tools" type="button" onClick={openAdvancedTools} aria-label="Open advanced tools"><Menu size={17} /><span>Tools</span></button>
+            <span className="topbar-avatar" aria-hidden="true">
               {data.settings.name.trim() ? data.settings.name.trim().charAt(0).toUpperCase() : <Wallet size={18} />}
-            </NavLink>
+            </span>
           </div>
         </header>
 
@@ -156,19 +203,40 @@ function AppShell({ data, saveData, storageError, clearStorageError, children })
         {notice && <div className={`toast toast-${notice.type}`} role={notice.type === 'error' ? 'alert' : 'status'}><span>{notice.type === 'success' ? <Check size={17} /> : <X size={17} />}</span>{notice.text}<button type="button" aria-label="Dismiss message" onClick={() => setNotice(null)}><X size={15} /></button></div>}
 
         <main className="page-content" id="main-content">
-          {typeof children === 'function' ? children({ data, saveData, setExpenseDialog: showExpenseDialog, onAddExpense: openAddExpense, onDeleteExpense: deleteExpense, onExport: exportBackup, onImport: importBackup }) : children}
+          {typeof children === 'function' ? children({ data, saveData, setExpenseDialog: showExpenseDialog, onAddExpense: openAddExpense, onDeleteExpense: deleteExpense, onExport: exportBackup, onExportCsv: exportCsv, onImport: importBackup }) : children}
         </main>
 
         <footer className="app-footer"><span>₹</span> A little more ease with your money, every day.</footer>
       </div>
 
-      <nav className="bottom-nav" aria-label="Main navigation">
-        {bottomNavigation.map(({ to, label, icon: Icon, end }) => (
-          <NavLink className={({ isActive }) => `bottom-nav-link ${isActive ? 'bottom-nav-active' : ''}`} key={to} to={to} end={end} aria-label={label}>
-            <Icon size={19} strokeWidth={1.8} aria-hidden="true" /><span>{label}</span>
-          </NavLink>
-        ))}
-      </nav>
+      <BottomNavigation items={bottomNavigation} />
+      {expenseDialog === undefined && <FloatingAddExpense onClick={openAddExpense} />}
+
+      {advancedOpen && (
+        <div className="tools-backdrop" onClick={closeAdvancedTools}>
+          <aside className="tools-drawer" role="dialog" aria-modal="true" aria-labelledby="tools-drawer-title" onClick={(event) => event.stopPropagation()} onKeyDown={handleToolsKeyDown}>
+            <div className="tools-drawer-heading">
+              <div><p className="eyebrow">Your money toolkit</p><h2 id="tools-drawer-title">More from Spendly</h2></div>
+              <button autoFocus className="icon-button" type="button" aria-label="Close tools" onClick={closeAdvancedTools}><X size={19} /></button>
+            </div>
+            <nav className="tools-drawer-links" aria-label="Advanced features">
+              {advancedNavigation.map(({ to, label, description, icon: Icon }) => (
+                <NavLink className="tools-drawer-link" to={to} key={to} onClick={() => setAdvancedOpen(false)}>
+                  <span className="tools-drawer-icon"><Icon size={18} /></span>
+                  <span><strong>{label}</strong><small>{description}</small></span>
+                  <ArrowRight size={16} />
+                </NavLink>
+              ))}
+              <button className="tools-drawer-link" type="button" onClick={() => { window.print(); closeAdvancedTools() }}>
+                <span className="tools-drawer-icon"><ClipboardList size={18} /></span>
+                <span><strong>Export as PDF</strong><small>Print or save a PDF from your browser</small></span>
+                <ArrowRight size={16} />
+              </button>
+            </nav>
+            <div className="tools-drawer-note"><ShieldCheck size={17} /><span>Your data stays private on this device.</span></div>
+          </aside>
+        </div>
+      )}
 
       {expenseDialog === 'choose' && (
         <ExpenseTypeDialog
@@ -193,7 +261,7 @@ function AppShell({ data, saveData, storageError, clearStorageError, children })
             const success = await saveData((current) => ({
               ...current,
               groups: current.groups.map((group) => group.id === groupExpense.groupId
-                ? { ...group, expenses: [...group.expenses, groupExpense.expense] }
+                ? { ...group, expenses: [...group.expenses, { ...groupExpense.expense, createdByUserId: session.user.id }] }
                 : group),
             }))
             if (success) {
@@ -283,6 +351,7 @@ function GroupExpenseDialog({ groups, onClose, onSave }) {
   const group = groups.find((item) => item.id === groupId)
   const [title, setTitle] = useState('')
   const [amount, setAmount] = useState('')
+  const [category, setCategory] = useState(CATEGORIES[0])
   const [date, setDate] = useState(todayISO())
   const [paidById, setPaidById] = useState('')
   const [participants, setParticipants] = useState([])
@@ -349,6 +418,7 @@ function GroupExpenseDialog({ groups, onClose, onSave }) {
       id: makeId(),
       title: title.trim(),
       amount: numericAmount,
+      category,
       date,
       paidById,
       participantIds: participants,
@@ -385,6 +455,7 @@ function GroupExpenseDialog({ groups, onClose, onSave }) {
             {group && <>
               {!group.members.length ? <p className="supporting-copy">Add members to this group before recording a shared expense.</p> : <>
                 <label className="field"><span>What was it for?</span><input type="text" value={title} onChange={(event) => setTitle(event.target.value)} maxLength={80} required /></label>
+                <CategorySelect value={category} onChange={setCategory} id="group-expense-category" />
                 <div className="form-grid">
                   <label className="field"><span>Amount (₹)</span><input type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required /></label>
                   <label className="field"><span>Date</span><input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></label>
@@ -487,24 +558,35 @@ function ExpenseDialog({ expense, onClose, onSave }) {
   )
 }
 
-function PageRoutes({ data, saveData, storageError, clearStorageError }) {
+function PageRoutes({ data, saveData, storageError, clearStorageError, session, onSignOut }) {
   return (
-    <AppShell data={data} saveData={saveData} storageError={storageError} clearStorageError={clearStorageError}>
-      {({ data: appData, saveData: persist, setExpenseDialog, onAddExpense, onDeleteExpense, onExport, onImport }) => (
+    <AppShell data={data} saveData={saveData} storageError={storageError} clearStorageError={clearStorageError} session={session}>
+      {({ data: appData, saveData: persist, setExpenseDialog, onDeleteExpense, onExport, onExportCsv, onImport }) => (
         <Routes>
-          <Route path="/" element={<HomePage data={appData} setExpenseDialog={setExpenseDialog} onAddExpense={onAddExpense} onDeleteExpense={onDeleteExpense} />} />
+          <Route path="/" element={<HomePage data={appData} setExpenseDialog={setExpenseDialog} onDeleteExpense={onDeleteExpense} />} />
+          <Route path="/groups" element={<GroupsPage data={appData} saveData={persist} userId={session.user.id} />} />
+          <Route path="/groups/:groupId" element={<GroupDetailPage data={appData} saveData={persist} userId={session.user.id} />} />
+          <Route path="/activity" element={<ActivityPage data={appData} />} />
+          <Route path="/personal" element={<PersonalPage data={appData} setExpenseDialog={setExpenseDialog} onDeleteExpense={onDeleteExpense} />} />
           <Route path="/history" element={<HistoryPage data={appData} setExpenseDialog={setExpenseDialog} onDeleteExpense={onDeleteExpense} />} />
           <Route path="/budget" element={<BudgetPage data={appData} saveData={persist} />} />
           <Route path="/analytics" element={<AnalyticsPage data={appData} saveData={persist} />} />
-          <Route path="/calendar" element={<CalendarPage data={appData} onAddExpense={onAddExpense} />} />
-          <Route path="/recurring" element={<RecurringPage data={appData} saveData={persist} />} />
-          <Route path="/groups" element={<GroupsPage data={appData} saveData={persist} onAddExpense={onAddExpense} />} />
-          <Route path="/settings" element={<SettingsPage data={appData} saveData={persist} onExport={onExport} onImport={onImport} />} />
-          <Route path="*" element={<HomePage data={appData} setExpenseDialog={setExpenseDialog} onAddExpense={onAddExpense} onDeleteExpense={onDeleteExpense} />} />
+          <Route path="/calendar" element={<CalendarPage data={appData} />} />
+          <Route path="/recurring" element={<RecurringPage data={appData} saveData={persist} userId={session.user.id} />} />
+          <Route path="/settings" element={<SettingsPage data={appData} saveData={persist} onExport={onExport} onExportCsv={onExportCsv} onImport={onImport} />} />
+          <Route path="/account" element={<AccountPage user={session.user} onSignOut={onSignOut} />} />
+          <Route path="*" element={<HomePage data={appData} setExpenseDialog={setExpenseDialog} onDeleteExpense={onDeleteExpense} />} />
         </Routes>
       )}
     </AppShell>
   )
+}
+
+function AuthenticatedRoutes({ data, saveData, storageError, clearStorageError, session, onSignOut, authError }) {
+  const location = useLocation()
+  if (location.pathname === '/reset-password') return <Suspense fallback={<div className="loading-screen"><span className="loading-mark">₹</span><p>Preparing password reset…</p></div>}><AuthPage key={location.pathname} initialMode="reset" initialError={authError} /></Suspense>
+  if (!session) return <Suspense fallback={<div className="loading-screen"><span className="loading-mark">₹</span><p>Preparing your account…</p></div>}><AuthPage key={location.pathname} initialError={authError} /></Suspense>
+  return <PageRoutes data={data} saveData={saveData} storageError={storageError} clearStorageError={clearStorageError} session={session} onSignOut={onSignOut} />
 }
 
 function App() {
@@ -513,6 +595,56 @@ function App() {
   const dataRef = useRef(null)
   const [loadError, setLoadError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [session, setSession] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [authError, setAuthError] = useState('')
+  const authEventSeen = useRef(false)
+
+  useEffect(() => {
+    let active = true
+    let unsubscribe = () => {}
+    import('./lib/supabase').then(({ supabase, supabaseConfigurationError }) => {
+      if (!active) return
+      if (!supabase) {
+        setAuthError(supabaseConfigurationError)
+        setAuthLoading(false)
+        return
+      }
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+        authEventSeen.current = true
+        if (active) {
+          setSession(nextSession)
+          setAuthError('')
+          setAuthLoading(false)
+        }
+      })
+      unsubscribe = () => subscription.unsubscribe()
+      return supabase.auth.getSession().then(({ data: sessionData, error }) => {
+        if (!active || authEventSeen.current) return
+        if (error) {
+          setAuthError(error.message)
+        } else {
+          setSession(sessionData.session)
+        }
+        setAuthLoading(false)
+      })
+    }).catch((error) => {
+      if (!active || authEventSeen.current) return
+      setAuthError(error instanceof Error ? error.message : 'Could not check your sign-in status.')
+      setAuthLoading(false)
+    })
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [])
+
+  const signOut = async () => {
+    const { supabase } = await import('./lib/supabase')
+    if (!supabase) throw new Error('Authentication is not configured.')
+    const { error } = await supabase.auth.signOut()
+    if (error) throw error
+  }
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -580,7 +712,7 @@ function App() {
       <main className="storage-error-screen">
         <span className="privacy-icon"><ShieldCheck size={22} /></span>
         <h1>Your data is still yours.</h1>
-        <p>Rupee Wise needs permission to use this browser’s local storage to open your information.</p>
+        <p>Spendly needs permission to use this browser’s local storage to open your information.</p>
         <p className="field-error">{loadError}</p>
         <button className="button button-primary" type="button" onClick={loadData}>Try again <ArrowRight size={17} /></button>
       </main>
@@ -589,7 +721,17 @@ function App() {
 
   return (
     <BrowserRouter>
-      <PageRoutes data={data ?? emptyAppData()} saveData={saveData} storageError={storageError} clearStorageError={() => setStorageError('')} />
+      {authLoading
+        ? <div className="loading-screen"><span className="loading-mark">₹</span><p>Checking your account…</p></div>
+        : <AuthenticatedRoutes
+            data={data ?? emptyAppData()}
+            saveData={saveData}
+            storageError={storageError}
+            clearStorageError={() => setStorageError('')}
+            session={session}
+            onSignOut={signOut}
+            authError={authError}
+          />}
     </BrowserRouter>
   )
 }

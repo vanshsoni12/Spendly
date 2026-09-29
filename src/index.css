@@ -1,19 +1,19 @@
 :root {
   font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  color: #292839;
-  background: #f8f8fb;
+  color: #342b32;
+  background: #fff8f5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-optical-sizing: auto;
   font-weight: 400;
-  --ink: #292839;
-  --muted: #8e8d9b;
-  --line: #eeedf2;
+  --ink: #342b32;
+  --muted: #95868c;
+  --line: #f2e7e3;
   --paper: #fff;
-  --canvas: #f8f8fb;
-  --indigo: #6957e8;
-  --indigo-dark: #5746d1;
-  --indigo-soft: #f0eeff;
+  --canvas: #fff8f5;
+  --indigo: #d74e7b;
+  --indigo-dark: #bd3865;
+  --indigo-soft: #fff0f4;
   --red: #d65464;
   --red-soft: #fff0f0;
   --green: #4b9a79;
@@ -65,13 +65,13 @@ a:focus-visible,
 input:focus-visible,
 select:focus-visible,
 summary:focus-visible {
-  outline: 3px solid rgb(105 87 232 / 40%);
+  outline: 3px solid rgb(215 78 123 / 42%);
   outline-offset: 3px;
 }
 
 ::selection {
-  color: #302876;
-  background: #e3dfff;
+  color: #8d2f51;
+  background: #ffe1e9;
 }
 
 @media (prefers-reduced-motion: reduce) {

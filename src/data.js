@@ -63,8 +63,9 @@ export function migrateAppData(value) {
       : ''
     return {
       ...rule,
+      scope: rule.scope ?? 'personal',
       frequency,
-      interval: rule.interval ?? (frequency === 'quarterly' ? 3 : frequency === 'yearly' ? 12 : 1),
+      interval: rule.interval ?? (frequency === 'quarterly' ? 3 : frequency === 'semiannual' ? 6 : frequency === 'yearly' ? 12 : 1),
       intervalUnit: rule.intervalUnit ?? (frequency === 'weekly' ? 'week' : 'month'),
       startDate: rule.startDate ?? legacyStartDate,
       endDate: rule.endDate ?? '',
@@ -93,7 +94,7 @@ function scheduleStartDate(rule) {
 function recurringDateAt(rule, occurrence) {
   const [year, month, day] = scheduleStartDate(rule).split('-').map(Number)
   const frequency = rule.frequency ?? 'monthly'
-  const interval = rule.interval ?? (frequency === 'quarterly' ? 3 : frequency === 'yearly' ? 12 : 1)
+  const interval = rule.interval ?? (frequency === 'quarterly' ? 3 : frequency === 'semiannual' ? 6 : frequency === 'yearly' ? 12 : 1)
   const unit = rule.intervalUnit ?? (frequency === 'weekly' ? 'week' : 'month')
 
   if (frequency === 'weekly' || (frequency === 'custom' && unit !== 'month')) {
@@ -134,31 +135,55 @@ export function getRecurringDatesBetween(rule, startDate, endDate) {
 export function applyRecurringExpenses(value, now = new Date()) {
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
   const expenses = [...value.expenses]
+  const groups = value.groups.map((group) => ({ ...group, expenses: [...group.expenses] }))
   const existingOccurrences = new Set(
-    expenses.filter((expense) => expense.recurringId).map((expense) => `${expense.recurringId}:${expense.date}`),
+    [
+      ...expenses,
+      ...groups.flatMap((group) => group.expenses),
+    ].filter((expense) => expense.recurringId).map((expense) => `${expense.recurringId}:${expense.date}`),
   )
 
   for (const recurring of value.recurringExpenses) {
     if (!recurring.active || scheduleStartDate(recurring) > today) continue
+    const group = recurring.scope === 'group' ? groups.find((item) => item.id === recurring.groupId) : null
+    if (recurring.scope === 'group' && !group) continue
     for (let occurrence = 0; occurrence < 100_000; occurrence += 1) {
       const date = recurringDateAt(recurring, occurrence)
       if (date > today || date > (recurring.endDate || '9999-12-31')) break
       if (!recurring.skippedDates?.includes(date) && !existingOccurrences.has(`${recurring.id}:${date}`)) {
-        expenses.push({
-          id: `recurring-${recurring.id}-${date}`,
-          amount: recurring.amount,
-          category: recurring.category,
-          date,
-          note: recurring.note,
-          createdAt: new Date(`${date}T12:00:00`).toISOString(),
-          recurringId: recurring.id,
-        })
+        if (group) {
+          group.expenses.push({
+            id: `recurring-${recurring.id}-${date}`,
+            title: recurring.note || recurring.category,
+            amount: recurring.amount,
+            category: recurring.category,
+            date,
+            paidById: recurring.paidById,
+            participantIds: [...recurring.participantIds],
+            splitType: recurring.splitType,
+            ...(recurring.splitType === 'custom' ? { participantShares: { ...recurring.participantShares } } : {}),
+            ...(recurring.createdByUserId ? { createdByUserId: recurring.createdByUserId } : {}),
+            createdAt: new Date(`${date}T12:00:00`).toISOString(),
+            recurringId: recurring.id,
+          })
+        } else {
+          expenses.push({
+            id: `recurring-${recurring.id}-${date}`,
+            amount: recurring.amount,
+            category: recurring.category,
+            date,
+            note: recurring.note,
+            createdAt: new Date(`${date}T12:00:00`).toISOString(),
+            recurringId: recurring.id,
+          })
+        }
         existingOccurrences.add(`${recurring.id}:${date}`)
       }
     }
   }
 
-  return expenses.length === value.expenses.length ? value : { ...value, expenses }
+  const groupsChanged = groups.some((group, index) => group.expenses.length !== value.groups[index].expenses.length)
+  return expenses.length === value.expenses.length && !groupsChanged ? value : { ...value, expenses, groups }
 }
 
 export async function writeAppData(data) {
@@ -180,7 +205,7 @@ export function validateBackup(value) {
     !value.settings ||
     typeof value.settings !== 'object'
   ) {
-    throw new Error('This file is not a supported Rupee Wise backup.')
+    throw new Error('This file is not a supported Spendly backup.')
   }
 
   const validDate = (date) => {
@@ -240,8 +265,34 @@ export function validateBackup(value) {
   const normalizedRecurringExpenses = migrateAppData({ recurringExpenses }).recurringExpenses
   for (const recurring of normalizedRecurringExpenses) {
     const skippedDates = recurring?.skippedDates ?? []
-    const validFrequency = ['weekly', 'monthly', 'quarterly', 'yearly', 'custom'].includes(recurring?.frequency)
+    const validFrequency = ['weekly', 'monthly', 'quarterly', 'semiannual', 'yearly', 'custom'].includes(recurring?.frequency)
     const validIntervalUnit = ['day', 'week', 'month'].includes(recurring?.intervalUnit)
+    const group = recurring?.scope === 'group' ? value.groups.find((item) => item.id === recurring.groupId) : null
+    const groupShares = recurring?.participantShares
+    const groupCustomSharesValid = recurring?.splitType !== 'custom' || (
+      groupShares &&
+      typeof groupShares === 'object' &&
+      !Array.isArray(groupShares) &&
+      Array.isArray(recurring.participantIds) &&
+      Object.keys(groupShares).length === recurring.participantIds.length &&
+      recurring.participantIds.every((id) =>
+        Object.hasOwn(groupShares, id) &&
+        typeof groupShares[id] === 'number' &&
+        Number.isFinite(groupShares[id]) &&
+        groupShares[id] >= 0,
+      ) &&
+      Object.values(groupShares).reduce((sum, share) => sum + Math.round(share * 100), 0) === Math.round(recurring.amount * 100)
+    )
+    const validGroupRule = recurring?.scope !== 'group' || (
+      group &&
+      Array.isArray(recurring.participantIds) &&
+      recurring.participantIds.length > 0 &&
+      recurring.participantIds.every((id) => group.members.some((member) => member.id === id)) &&
+      group.members.some((member) => member.id === recurring.paidById) &&
+      ['equal', 'custom'].includes(recurring.splitType) &&
+      groupCustomSharesValid &&
+      (recurring.splitType === 'equal' ? recurring.participantShares == null : true)
+    )
     if (
       !recurring ||
       typeof recurring.id !== 'string' ||
@@ -249,11 +300,13 @@ export function validateBackup(value) {
       !Number.isFinite(recurring.amount) ||
       recurring.amount <= 0 ||
       !CATEGORIES.includes(recurring.category) ||
+      !['personal', 'group'].includes(recurring.scope) ||
       !validFrequency ||
       !validIntervalUnit ||
       (recurring.frequency === 'weekly' && recurring.intervalUnit !== 'week') ||
       (recurring.frequency === 'monthly' && recurring.intervalUnit !== 'month') ||
       (recurring.frequency === 'quarterly' && (recurring.intervalUnit !== 'month' || recurring.interval !== 3)) ||
+      (recurring.frequency === 'semiannual' && (recurring.intervalUnit !== 'month' || recurring.interval !== 6)) ||
       (recurring.frequency === 'yearly' && (recurring.intervalUnit !== 'month' || recurring.interval !== 12)) ||
       typeof recurring.interval !== 'number' ||
       !Number.isInteger(recurring.interval) ||
@@ -264,6 +317,7 @@ export function validateBackup(value) {
       (recurring.pausedAt != null && recurring.pausedAt !== '' && !validDate(recurring.pausedAt)) ||
       typeof recurring.active !== 'boolean' ||
       (recurring.note != null && typeof recurring.note !== 'string') ||
+      !validGroupRule ||
       !Array.isArray(skippedDates) ||
       skippedDates.some((date) => !validDate(date))
     ) {
