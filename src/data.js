@@ -36,14 +36,34 @@ export function emptyAppData() {
   }
 }
 
-async function getDatabase() {
-  return openDB(DATABASE_NAME, DATABASE_VERSION, {
-    upgrade(database) {
-      if (!database.objectStoreNames.contains(STORE_NAME)) {
-        database.createObjectStore(STORE_NAME, { keyPath: 'id' })
-      }
-    },
-  })
+let databasePromise
+function getDatabase() {
+  if (!databasePromise) {
+    databasePromise = openDB(DATABASE_NAME, DATABASE_VERSION, {
+      upgrade(database) {
+        if (!database.objectStoreNames.contains(STORE_NAME)) {
+          database.createObjectStore(STORE_NAME, { keyPath: 'id' })
+        }
+      },
+      blocking() {
+        const connection = databasePromise
+        databasePromise = undefined
+        connection?.then((database) => database.close()).catch(() => {})
+      },
+      terminated() { databasePromise = undefined },
+    }).catch((error) => {
+      databasePromise = undefined
+      throw error
+    })
+  }
+  return databasePromise
+}
+
+export async function loadAppData(userId, now = new Date()) {
+  const stored = await readAppData(userId)
+  const updated = applyRecurringExpenses(stored, now)
+  if (updated !== stored) await writeAppData(updated, userId)
+  return updated
 }
 
 export async function readAppData(userId) {
@@ -455,4 +475,11 @@ export async function readLegacyAppData() {
   const database = await getDatabase()
   const record = await database.get(STORE_NAME, 'primary')
   return record?.data ? migrateAppData(record.data) : null
+}
+
+export function addRecurringRule(current, recurring, now = new Date()) {
+  return applyRecurringExpenses({
+    ...current,
+    recurringExpenses: [...current.recurringExpenses, recurring],
+  }, now)
 }

@@ -44,7 +44,7 @@ import {
   ReceiptThumbnail,
   TransactionItem,
 } from './components'
-import { applyRecurringExpenses, CATEGORIES, getNextRecurringDate, getRecurringDatesBetween, readLegacyAppData, validateBackup } from './data'
+import { addRecurringRule, applyRecurringExpenses, CATEGORIES, getNextRecurringDate, getRecurringDatesBetween, readLegacyAppData, validateBackup } from './data'
 import { currentMonth, formatDate, formatMoney, formatMonth, todayISO } from './utils'
 import { parseBankStatement } from './statements'
 
@@ -443,12 +443,13 @@ export function BudgetPage({ data, saveData }) {
   const withinCount = budgetMonths.filter(([monthKey, amount]) => monthSpending(data.expenses, monthKey) <= amount).length
   const overCount = budgetMonths.length - withinCount
 
-  const handleBudgetSave = (event) => {
+  const handleBudgetSave = async (event) => {
     event.preventDefault()
     const amount = Number(draft)
     if (!Number.isFinite(amount) || amount < 0) return
-    saveData((current) => ({ ...current, budgets: { ...current.budgets, [selectedMonth]: amount } }))
-    setDraft('')
+    if (await saveData((current) => ({ ...current, budgets: { ...current.budgets, [selectedMonth]: amount } }))) {
+      setDraft((current) => current === draft ? '' : current)
+    }
   }
 
   const changeMonth = (month) => {
@@ -534,19 +535,23 @@ function CategoryBudgetSection({ data, saveData, month }) {
   const [drafts, setDrafts] = useState({})
   const limits = data.categoryBudgets[month] ?? {}
   const expenses = monthExpenses(data.expenses, month)
-  const submit = (event) => {
+  const submit = async (event) => {
     event.preventDefault()
-    const nextLimits = { ...limits }
-    for (const category of CATEGORIES) {
-      if (!(category in drafts)) continue
-      const amount = Number(drafts[category])
-      if (Number.isFinite(amount) && amount >= 0) {
-        if (amount === 0) delete nextLimits[category]
-        else nextLimits[category] = amount
+    const saved = await saveData((current) => {
+      const nextLimits = { ...current.categoryBudgets[month] }
+      for (const category of CATEGORIES) {
+        if (!(category in drafts)) continue
+        const amount = Number(drafts[category])
+        if (Number.isFinite(amount) && amount >= 0) {
+          if (amount === 0) delete nextLimits[category]
+          else nextLimits[category] = amount
+        }
       }
-    }
-    saveData((current) => ({ ...current, categoryBudgets: { ...current.categoryBudgets, [month]: nextLimits } }))
-    setDrafts({})
+      return { ...current, categoryBudgets: { ...current.categoryBudgets, [month]: nextLimits } }
+    })
+    if (saved) setDrafts((current) => Object.fromEntries(
+      Object.entries(current).filter(([category, value]) => !(category in drafts) || value !== drafts[category]),
+    ))
   }
 
   return (
@@ -655,13 +660,14 @@ function GroupCard({ group, saveData, detailPage = false, userName = '', userId 
     groups: current.groups.map((item) => item.id === group.id ? mutate(item) : item),
   }))
 
-  const addMember = (event) => {
+  const addMember = async (event) => {
     event.preventDefault()
     const name = memberName.trim()
     if (!name) return
     const member = { id: crypto.randomUUID(), name }
-    updateGroup((item) => ({ ...item, members: [...item.members, member] }))
-    setMemberName('')
+    if (await updateGroup((item) => ({ ...item, members: [...item.members, member] }))) {
+      setMemberName((current) => current === memberName ? '' : current)
+    }
   }
 
   const saveSharedExpense = async (event) => {
@@ -870,12 +876,15 @@ export function GroupsPage({ data, saveData, userId }) {
   )
   const knownBalances = data.groups.map((group) => getUserGroupBalance(group, userName)).filter((balance) => balance != null)
   const totalBalance = knownBalances.length ? knownBalances.reduce((sum, balance) => sum + balance, 0) : null
-  const handleCreateGroup = (event) => {
+  const handleCreateGroup = async (event) => {
     event.preventDefault()
     const groupName = name.trim()
     if (!groupName) return
-    saveData((current) => ({ ...current, groups: [...current.groups, { id: crypto.randomUUID(), name: groupName, ownerUserId: userId, members: [], expenses: [] }] }))
-    setName('')
+    const group = { id: crypto.randomUUID(), name: groupName, ownerUserId: userId, members: [], expenses: [] }
+    if (await saveData((current) => ({ ...current, groups: [...current.groups, group] }))) {
+      setName((current) => current === name ? '' : current)
+      setCreateOpen(false)
+    }
   }
 
   return (
@@ -900,7 +909,7 @@ export function GroupsPage({ data, saveData, userId }) {
           />
         ))}
       </section> : <section className="card"><EmptyState icon={Users} title={data.groups.length ? 'No groups found' : 'Make sharing feel simple'}>{data.groups.length ? 'Try another group or member name.' : 'Create your first group to add people, log shared expenses, and see an easy settle-up plan.'}</EmptyState></section>}
-      {createOpen && <form className="card create-group-form" id="create-group-form" onSubmit={(event) => { handleCreateGroup(event); setCreateOpen(false) }}>
+      {createOpen && <form className="card create-group-form" id="create-group-form" onSubmit={handleCreateGroup}>
         <div><p className="eyebrow">Start a little group</p><h2>Create a group</h2><p className="supporting-copy">Trips, roommates, family — create a group and keep shared spending fair.</p></div>
         <div className="create-group-controls">
           <label className="visually-hidden" htmlFor="new-group-name">Group name</label>
@@ -1685,8 +1694,7 @@ export function RecurringPage({ data, saveData, userId }) {
         ...(shares ? { participantShares: shares } : {}),
       } : {}),
     }
-    const nextData = applyRecurringExpenses({ ...data, recurringExpenses: [...data.recurringExpenses, recurring] })
-    if (await saveData(() => nextData)) {
+    if (await saveData((current) => addRecurringRule(current, recurring))) {
       setAmount('')
       setNote('')
       setDate(todayISO())

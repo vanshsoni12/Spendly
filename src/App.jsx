@@ -19,9 +19,20 @@ import {
 } from 'lucide-react'
 import { BrowserRouter, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { BottomNavigation, CategorySelect, FloatingAddExpense, ReceiptField } from './components'
-import { applyRecurringExpenses, CATEGORIES, emptyAppData, readAppData, validateBackup, writeAppData } from './data'
+import { applyRecurringExpenses, CATEGORIES, emptyAppData, loadAppData, validateBackup, writeAppData } from './data'
 import { formatDate, formatMoney, makeId, todayISO } from './utils'
-import { AccountPage, ActivityPage, AnalyticsPage, BudgetPage, CalendarPage, GroupDetailPage, GroupsPage, HistoryPage, HomePage, PersonalPage, RecurringPage, SettingsPage } from './pages'
+const AccountPage = lazy(() => import('./pages').then((pages) => ({ default: pages.AccountPage })))
+const ActivityPage = lazy(() => import('./pages').then((pages) => ({ default: pages.ActivityPage })))
+const AnalyticsPage = lazy(() => import('./pages').then((pages) => ({ default: pages.AnalyticsPage })))
+const BudgetPage = lazy(() => import('./pages').then((pages) => ({ default: pages.BudgetPage })))
+const CalendarPage = lazy(() => import('./pages').then((pages) => ({ default: pages.CalendarPage })))
+const GroupDetailPage = lazy(() => import('./pages').then((pages) => ({ default: pages.GroupDetailPage })))
+const GroupsPage = lazy(() => import('./pages').then((pages) => ({ default: pages.GroupsPage })))
+const HistoryPage = lazy(() => import('./pages').then((pages) => ({ default: pages.HistoryPage })))
+const HomePage = lazy(() => import('./pages').then((pages) => ({ default: pages.HomePage })))
+const PersonalPage = lazy(() => import('./pages').then((pages) => ({ default: pages.PersonalPage })))
+const RecurringPage = lazy(() => import('./pages').then((pages) => ({ default: pages.RecurringPage })))
+const SettingsPage = lazy(() => import('./pages').then((pages) => ({ default: pages.SettingsPage })))
 import { createSaveQueue } from './saveQueue'
 import './App.css'
 
@@ -596,6 +607,7 @@ function PageRoutes({ data, saveData, storageError, clearStorageError, session, 
   return (
     <AppShell data={data} saveData={saveData} storageError={storageError} clearStorageError={clearStorageError} session={session}>
       {({ data: appData, saveData: persist, setExpenseDialog, onDeleteExpense, onExport, onExportCsv, onExportPdf, onImport }) => (
+        <Suspense fallback={<p role="status">Loading page…</p>}>
         <Routes>
           <Route path="/" element={<HomePage data={appData} setExpenseDialog={setExpenseDialog} onDeleteExpense={onDeleteExpense} />} />
           <Route path="/groups" element={<GroupsPage data={appData} saveData={persist} userId={session.user.id} />} />
@@ -611,6 +623,7 @@ function PageRoutes({ data, saveData, storageError, clearStorageError, session, 
           <Route path="/account" element={<AccountPage user={session.user} onSignOut={onSignOut} />} />
           <Route path="*" element={<HomePage data={appData} setExpenseDialog={setExpenseDialog} onDeleteExpense={onDeleteExpense} />} />
         </Routes>
+        </Suspense>
       )}
     </AppShell>
   )
@@ -635,8 +648,7 @@ function AccountApp({ session, onSignOut }) {
     setLoading(true)
     setLoadError('')
     try {
-      const storedData = applyRecurringExpenses(await readAppData(session.user.id))
-      await writeAppData(storedData, session.user.id)
+      const storedData = await loadAppData(session.user.id)
       dataRef.current = storedData
       setData(storedData)
     } catch (error) {
@@ -648,11 +660,7 @@ function AccountApp({ session, onSignOut }) {
 
   useEffect(() => {
     let active = true
-    readAppData(session.user.id)
-      .then((loadedData) => {
-        const storedData = applyRecurringExpenses(loadedData)
-        return writeAppData(storedData, session.user.id).then(() => storedData)
-      })
+    loadAppData(session.user.id)
       .then((storedData) => {
         if (!active) return
         dataRef.current = storedData

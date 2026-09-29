@@ -1,10 +1,12 @@
+const moneyFormatters = [0, 2].map((maximumFractionDigits) => new Intl.NumberFormat('en-IN', {
+  style: 'currency',
+  currency: 'INR',
+  maximumFractionDigits,
+  minimumFractionDigits: 0,
+}))
+
 export function formatMoney(amount, options = {}) {
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: options.decimals ? 2 : 0,
-    minimumFractionDigits: 0,
-  }).format(amount)
+  return moneyFormatters[options.decimals ? 1 : 0].format(amount)
 }
 
 export function formatMonth(month) {
